@@ -25,7 +25,15 @@
 
 - **Left-click + Drag**: Move sprite
 - **Double right-click**: Kill individual sprite
-- **Panel control**: Spawn new pets, adjust settings
+- **Panel control**: Spawn new pets, adjust settings, TikTok connection
+
+### TikTok Integration
+
+- **Standalone Operation**: Application runs independently without TikTok
+- **Optional Connection**: Username input through control panel for TikTok Live
+- **Automatic Persistence**: Successful usernames saved to config.json
+- **Error Handling**: Connection failures logged without breaking functionality
+- **Real-time Response**: Chat messages trigger pet behaviors and speech bubbles
 
 ## Technical Stack
 
@@ -115,96 +123,84 @@ sprite_pack/
 
 ## Development Phases
 
-### Phase 1: Core Desktop Pet
+### Phase 1: Foundation & Basic Interactions
 
-#### Step 1: Foundation Setup
+#### Step 1: Core Infrastructure
 
-**Goal**: Basic window and XML parsing
+**Goal**: Basic window, sprite display, and user interactions
 
 - [x] Project structure setup
-- [ ] Pygame transparent window creation
-- [ ] Basic XML parser for actions.xml and behaviors.xml
-- [ ] Simple sprite loading system
-- [ ] Error handling for missing files
+- [ ] Pygame transparent window creation (always on top)
+- [ ] Single sprite loading and display (shime1.png)
+- [ ] Basic mouse event handling
+- [ ] Left-click drag implementation
+- [ ] Double right-click kill functionality
 
-**Deliverable**: Window that can load and display a single sprite
+**Deliverable**: Interactive sprite that can be moved and removed
 
-#### Step 2: Basic Animation System
-
-**Goal**: Sprite animation and movement
-
-- [ ] Animation frame management
-- [ ] Basic animations (Stand, Walk, Sit)
-- [ ] Sprite positioning and anchor points
-- [ ] Simple movement velocity system
-
-**Deliverable**: Animated sprite that can walk and change states
-
-#### Step 3: Desktop Integration
-
-**Goal**: Screen interaction and boundaries
-
-- [ ] Screen boundary detection
-- [ ] Gravity and floor collision
-- [ ] Random behavior selection (simplified)
-- [ ] Basic state machine (idle, walking, sitting)
-
-**Deliverable**: Pet that moves around desktop within screen bounds
-
-#### Step 4: Control Panel
+#### Step 2: Control Panel Foundation
 
 **Goal**: Basic management interface
 
 - [ ] PyQt5 control panel window
 - [ ] Spawn new pet functionality
-- [ ] Basic settings (volume, behavior frequency)
+- [ ] Kill all pets functionality
+- [ ] Basic settings UI structure
 - [ ] JSON config save/load system
 
 **Deliverable**: Working control panel for pet management
 
-### Phase 1.5: Window Interaction
+#### Step 3: XML Parser & Animation System
 
-#### Step 1: Window Detection
+**Goal**: Sprite animation and configuration
 
-**Goal**: Active window awareness
+- [ ] XML parser for actions.xml and behaviors.xml
+- [ ] Animation frame management system
+- [ ] Basic animations (Stand, Walk, Sit) implementation
+- [ ] Sprite positioning and anchor points
+- [ ] Error handling for missing files
+
+**Deliverable**: Animated sprite with XML-driven behaviors
+
+#### Step 4: Desktop Boundaries & Physics
+
+**Goal**: Screen interaction and basic physics
+
+- [ ] Screen boundary detection
+- [ ] Gravity and floor collision system
+- [ ] Basic state machine (idle, walking, sitting)
+- [ ] Random behavior selection (simplified)
+- [ ] Multi-pet management system
+
+**Deliverable**: Pet that moves naturally within desktop bounds
+
+### Phase 2: Advanced Features & Window Interaction
+
+#### Step 1: Professional Logging System
+
+**Goal**: Comprehensive logging and debugging
+
+- [ ] Professional logging framework (time, type, content)
+- [ ] Log levels: INFO, WARNING, ERROR
+- [ ] Log panel integration in control panel (bottom section)
+- [ ] Log file output (.log format)
+- [ ] Log filtering and search functionality
+
+**Deliverable**: Complete logging system for debugging and monitoring
+
+#### Step 2: Window Interaction System
+
+**Goal**: Desktop window awareness and interaction
 
 - [ ] Windows API integration (win32gui)
 - [ ] Active window detection and boundaries
 - [ ] Window state monitoring (minimized, maximized)
-- [ ] Multi-monitor support consideration
+- [ ] Basic window positioning (sit on titlebar)
+- [ ] Window edge detection and climbing
 
-#### Step 2: Window-Based Positioning
+**Deliverable**: Pet that interacts with desktop windows
 
-**Goal**: Basic window interaction
-
-- [ ] Sit on window titlebar
-- [ ] Window edge detection
-- [ ] Positioning relative to windows
-- [ ] Window change event handling
-
-#### Step 3: Advanced Window Behaviors
-
-**Goal**: Complex window interactions
-
-- [ ] Climb window edges
-- [ ] Walk along window bottom/top
-- [ ] Jump between windows
-- [ ] React to window minimize/maximize
-
-**Deliverable**: Pet that interacts naturally with desktop windows
-
-### Phase 2: Enhanced Interactions
-
-#### Step 1: User Interactions
-
-**Goal**: Direct sprite interaction
-
-- [ ] Mouse event handling
-- [ ] Left-click drag implementation
-- [ ] Double right-click kill functionality
-- [ ] Visual feedback for interactions
-
-#### Step 2: Behavior System Enhancement
+#### Step 3: Enhanced Behavior System
 
 **Goal**: Rich behavior implementation
 
@@ -212,48 +208,61 @@ sprite_pack/
 - [ ] Simplified condition system
 - [ ] Behavior chaining (NextBehaviorList)
 - [ ] Random vs triggered behaviors
+- [ ] Advanced window interactions (climb edges, jump between windows)
 
-#### Step 3: Speech Bubble System
+**Deliverable**: Sophisticated pet behavior system
 
-**Goal**: Text communication
+#### Step 4: Speech Bubble System
 
-- [ ] Bubble rendering system
+**Goal**: Text communication system
+
+- [ ] Speech bubble rendering system
 - [ ] Text formatting and wrapping
 - [ ] 10-second display timer
 - [ ] Positioning relative to sprite
+- [ ] Multiple bubble management
 
-**Deliverable**: Interactive pets with speech capabilities
+**Deliverable**: Pet communication system ready for TikTok integration
 
 ### Phase 3: TikTok Integration & Advanced Features
 
-#### Step 1: TikTok Live Connection
+#### Step 1: TikTok Connection Infrastructure
 
-**Goal**: Real-time chat integration
+**Goal**: Optional TikTok Live integration
 
 - [ ] TikTokLive library integration
-- [ ] Connection testing and error handling
-- [ ] Basic chat message capture
-- [ ] Connection status monitoring
+- [ ] Username input in control panel
+- [ ] Connection validation on-submit
+- [ ] Config persistence for successful usernames
+- [ ] Error handling with log-only feedback
+- [ ] Standalone operation without TikTok
 
-#### Step 2: Event Mapping System
+**Deliverable**: Optional TikTok Live connection system
 
-**Goal**: Chat-to-behavior mapping
+#### Step 2: Chat Event Processing
 
-- [ ] Chat command recognition
+**Goal**: Real-time chat interaction
+
+- [ ] Chat message capture and parsing
+- [ ] Command recognition system
 - [ ] Behavior trigger from chat events
 - [ ] User interaction response system
-- [ ] Gift/donation reaction system
+- [ ] Connection status monitoring and auto-reconnect
 
-#### Step 3: Sound & Clone System
+**Deliverable**: Real-time chat-to-behavior mapping
 
-**Goal**: Audio and multi-pet features
+#### Step 3: Advanced Features
+
+**Goal**: Audio, cloning, and polish
 
 - [ ] Sound system implementation (.wav support)
 - [ ] Volume control integration
 - [ ] Clone/spawn system from behaviors
-- [ ] Multi-pet management
+- [ ] Gift/donation reaction system
+- [ ] Multi-pet coordination for chat events
+- [ ] Performance optimization for multiple pets
 
-**Deliverable**: Full-featured desktop pets with TikTok Live integration
+**Deliverable**: Full-featured desktop pets with complete TikTok Live integration
 
 ## Technical Implementation Details
 
@@ -284,12 +293,21 @@ pet_state = {
 {
   "settings": {
     "volume": 70,
-    "spawn_rate": 5,
     "behavior_frequency": 50,
     "screen_boundaries": true,
-    "tiktok_enabled": false
+    "auto_save": true
   },
-  "sprite_packs": ["assets/sprite_pack_1", "assets/sprite_pack_2"],
+  "tiktok": {
+    "enabled": false,
+    "last_successful_username": "",
+    "auto_connect": false
+  },
+  "sprite_packs": ["assets/test_sprite"],
+  "logging": {
+    "level": "INFO",
+    "save_to_file": true,
+    "max_log_size": "10MB"
+  },
   "active_pets": []
 }
 ```
