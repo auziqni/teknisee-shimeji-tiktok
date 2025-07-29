@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-control_panel.py - PyQt5 control panel interface
+control_panel.py - Enhanced with boundary settings
 
-Enhanced control panel with tabbed interface, settings management,
-and real-time pet monitoring with professional UI design.
+Added boundary configuration UI with sliders for left wall, right wall, and ground positioning.
 """
 
 from PyQt5.QtWidgets import (QMainWindow, QPushButton, QVBoxLayout, QWidget, 
@@ -21,7 +20,7 @@ if TYPE_CHECKING:
 
 
 class ControlPanel(QMainWindow):
-    """Enhanced control panel with tabbed interface and settings"""
+    """Enhanced control panel with boundary settings"""
     
     # Signals for better event handling
     pet_spawned = pyqtSignal(str, str)  # sprite_name, pet_id
@@ -148,9 +147,9 @@ class ControlPanel(QMainWindow):
         info_layout = QVBoxLayout(info_group)
         info_text = QLabel(
             "• Left-click + drag to move pets (now with throw physics!)\n"
-            "• Double right-click to kill individual pet\n"
-            "• Single right-click to make pet sit / special actions\n"
-            "• F1 to toggle debug mode\n"
+            "• Right-click: Make pet sit / special actions\n"
+            "• Double right-click: Remove pet\n"
+            "• F1 to toggle debug mode (shows boundaries)\n"
             "• F2 to print performance info\n"
             "• Settings are auto-saved"
         )
@@ -161,7 +160,7 @@ class ControlPanel(QMainWindow):
         self.tab_widget.addTab(tab, "Pet Management")
     
     def _create_settings_tab(self) -> None:
-        """Create settings tab"""
+        """Create settings tab with boundary controls"""
         tab = QWidget()
         layout = QVBoxLayout(tab)
         
@@ -193,6 +192,67 @@ class ControlPanel(QMainWindow):
         freq_layout.addWidget(self.freq_label)
         general_layout.addLayout(freq_layout)
         
+        layout.addWidget(general_group)
+        
+        # NEW: Boundary settings group
+        boundary_group = QGroupBox("Screen Boundaries")
+        boundary_layout = QVBoxLayout(boundary_group)
+        
+        # Left wall boundary
+        left_wall_layout = QHBoxLayout()
+        left_wall_layout.addWidget(QLabel("Left Wall:"))
+        self.left_wall_slider = QSlider(Qt.Horizontal)
+        self.left_wall_slider.setRange(0, 30)  # 0-30% max to prevent overlap
+        self.left_wall_slider.setValue(self.config.get('boundaries.left_wall_percent', 5))
+        self.left_wall_slider.valueChanged.connect(self._on_left_wall_changed)
+        left_wall_layout.addWidget(self.left_wall_slider)
+        self.left_wall_label = QLabel(f"{self.left_wall_slider.value()}%")
+        left_wall_layout.addWidget(self.left_wall_label)
+        boundary_layout.addLayout(left_wall_layout)
+        
+        # Right wall boundary
+        right_wall_layout = QHBoxLayout()
+        right_wall_layout.addWidget(QLabel("Right Wall:"))
+        self.right_wall_slider = QSlider(Qt.Horizontal)
+        self.right_wall_slider.setRange(70, 100)  # 70-100% min to prevent overlap
+        self.right_wall_slider.setValue(self.config.get('boundaries.right_wall_percent', 95))
+        self.right_wall_slider.valueChanged.connect(self._on_right_wall_changed)
+        right_wall_layout.addWidget(self.right_wall_slider)
+        self.right_wall_label = QLabel(f"{self.right_wall_slider.value()}%")
+        right_wall_layout.addWidget(self.right_wall_label)
+        boundary_layout.addLayout(right_wall_layout)
+        
+        # Ground boundary
+        ground_layout = QHBoxLayout()
+        ground_layout.addWidget(QLabel("Ground:"))
+        self.ground_slider = QSlider(Qt.Horizontal)
+        self.ground_slider.setRange(60, 100)  # 60-100% to keep in lower portion
+        self.ground_slider.setValue(self.config.get('boundaries.ground_percent', 90))
+        self.ground_slider.valueChanged.connect(self._on_ground_changed)
+        ground_layout.addWidget(self.ground_slider)
+        self.ground_label = QLabel(f"{self.ground_slider.value()}%")
+        ground_layout.addWidget(self.ground_label)
+        boundary_layout.addLayout(ground_layout)
+        
+        # Boundary feature toggles
+        self.wall_climbing_check = QCheckBox("Enable Wall Climbing")
+        self.wall_climbing_check.setChecked(self.config.get('boundaries.wall_climbing_enabled', True))
+        self.wall_climbing_check.toggled.connect(self._on_wall_climbing_changed)
+        boundary_layout.addWidget(self.wall_climbing_check)
+        
+        self.corner_bounce_check = QCheckBox("Enable Corner Bouncing")
+        self.corner_bounce_check.setChecked(self.config.get('boundaries.corner_bounce_enabled', True))
+        self.corner_bounce_check.toggled.connect(self._on_corner_bounce_changed)
+        boundary_layout.addWidget(self.corner_bounce_check)
+        
+        # Boundary info
+        boundary_info = QLabel("Boundaries are shown as colored lines in debug mode (F1).\nBlue=Ground, Purple=Walls")
+        boundary_info.setWordWrap(True)
+        boundary_info.setStyleSheet("QLabel { font-size: 10px; color: gray; }")
+        boundary_layout.addWidget(boundary_info)
+        
+        layout.addWidget(boundary_group)
+        
         # Physics settings
         physics_group = QGroupBox("Physics Settings")
         physics_layout = QVBoxLayout(physics_group)
@@ -205,9 +265,9 @@ class ControlPanel(QMainWindow):
         self.gravity_spin.setSingleStep(10)
         self.gravity_spin.setValue(self.config.get('settings.physics_gravity_acceleration', 980))
         self.gravity_spin.valueChanged.connect(lambda v: self.settings_changed.emit('physics_gravity_acceleration', v))
-        self.gravity_spin.valueChanged.connect(lambda v: self.gravity_label.setText(f"{v}")) # Update label
+        self.gravity_spin.valueChanged.connect(lambda v: self.gravity_label.setText(f"{v}"))
         gravity_row_layout.addWidget(self.gravity_spin)
-        self.gravity_label = QLabel(f"{self.gravity_spin.value()}") # Initial label value
+        self.gravity_label = QLabel(f"{self.gravity_spin.value()}")
         gravity_row_layout.addWidget(self.gravity_label)
         physics_layout.addLayout(gravity_row_layout)
 
@@ -215,12 +275,12 @@ class ControlPanel(QMainWindow):
         air_res_row_layout = QHBoxLayout()
         air_res_row_layout.addWidget(QLabel("Air Resistance Factor (0.0-0.1):"))
         self.air_res_slider = QSlider(Qt.Horizontal)
-        self.air_res_slider.setRange(0, 100) # Representing 0.0 to 0.1
+        self.air_res_slider.setRange(0, 100)
         self.air_res_slider.setValue(int(self.config.get('settings.physics_air_resistance_factor', 0.001) * 1000))
         self.air_res_slider.valueChanged.connect(lambda v: self.settings_changed.emit('physics_air_resistance_factor', v / 1000.0))
-        self.air_res_slider.valueChanged.connect(lambda v: self.air_res_label.setText(f"{v / 1000.0:.3f}")) # Update label
+        self.air_res_slider.valueChanged.connect(lambda v: self.air_res_label.setText(f"{v / 1000.0:.3f}"))
         air_res_row_layout.addWidget(self.air_res_slider)
-        self.air_res_label = QLabel(f"{self.air_res_slider.value() / 1000.0:.3f}") # Initial label value
+        self.air_res_label = QLabel(f"{self.air_res_slider.value() / 1000.0:.3f}")
         air_res_row_layout.addWidget(self.air_res_label)
         physics_layout.addLayout(air_res_row_layout)
 
@@ -228,13 +288,12 @@ class ControlPanel(QMainWindow):
         bounce_coeff_row_layout = QHBoxLayout()
         bounce_coeff_row_layout.addWidget(QLabel("Bounce Coefficient (0.0-1.0):"))
         self.bounce_coeff_slider = QSlider(Qt.Horizontal)
-        self.bounce_coeff_slider.setRange(0, 100) # Representing 0.0 to 1.0
-        # Mengurangi nilai default bounce_coefficient menjadi 0.2 (dari 0.3)
+        self.bounce_coeff_slider.setRange(0, 100)
         self.bounce_coeff_slider.setValue(int(self.config.get('settings.physics_bounce_coefficient', 0.2) * 100))
         self.bounce_coeff_slider.valueChanged.connect(lambda v: self.settings_changed.emit('physics_bounce_coefficient', v / 100.0))
-        self.bounce_coeff_slider.valueChanged.connect(lambda v: self.bounce_coeff_label.setText(f"{v / 100.0:.2f}")) # Update label
+        self.bounce_coeff_slider.valueChanged.connect(lambda v: self.bounce_coeff_label.setText(f"{v / 100.0:.2f}"))
         bounce_coeff_row_layout.addWidget(self.bounce_coeff_slider)
-        self.bounce_coeff_label = QLabel(f"{self.bounce_coeff_slider.value() / 100.0:.2f}") # Initial label value
+        self.bounce_coeff_label = QLabel(f"{self.bounce_coeff_slider.value() / 100.0:.2f}")
         bounce_coeff_row_layout.addWidget(self.bounce_coeff_label)
         physics_layout.addLayout(bounce_coeff_row_layout)
 
@@ -242,40 +301,37 @@ class ControlPanel(QMainWindow):
         throw_mult_row_layout = QHBoxLayout()
         throw_mult_row_layout.addWidget(QLabel("Throw Multiplier (0.0-10.0):"))
         self.throw_mult_slider = QSlider(Qt.Horizontal)
-        self.throw_mult_slider.setRange(0, 100) # Representing 0.0 to 10.0
-        # Meningkatkan nilai default drag_throw_multiplier menjadi 6.0 (dari 4.0)
+        self.throw_mult_slider.setRange(0, 100)
         self.throw_mult_slider.setValue(int(self.config.get('settings.physics_drag_throw_multiplier', 6.0) * 10))
         self.throw_mult_slider.valueChanged.connect(lambda v: self.settings_changed.emit('physics_drag_throw_multiplier', v / 10.0))
-        self.throw_mult_slider.valueChanged.connect(lambda v: self.throw_mult_label.setText(f"{v / 10.0:.1f}")) # Update label
+        self.throw_mult_slider.valueChanged.connect(lambda v: self.throw_mult_label.setText(f"{v / 10.0:.1f}"))
         throw_mult_row_layout.addWidget(self.throw_mult_slider)
-        self.throw_mult_label = QLabel(f"{self.throw_mult_slider.value() / 10.0:.1f}") # Initial label value
+        self.throw_mult_label = QLabel(f"{self.throw_mult_slider.value() / 10.0:.1f}")
         throw_mult_row_layout.addWidget(self.throw_mult_label)
         physics_layout.addLayout(throw_mult_row_layout)
 
-        general_layout.addWidget(physics_group)
+        layout.addWidget(physics_group)
         
         # Checkboxes
         self.boundaries_check = QCheckBox("Keep pets within screen boundaries")
         self.boundaries_check.setChecked(self.config.get('settings.screen_boundaries', True))
         self.boundaries_check.toggled.connect(self._on_boundaries_changed)
-        general_layout.addWidget(self.boundaries_check)
+        layout.addWidget(self.boundaries_check)
         
         self.autosave_check = QCheckBox("Auto-save settings")
         self.autosave_check.setChecked(self.config.get('settings.auto_save', True))
         self.autosave_check.toggled.connect(self._on_autosave_changed)
-        general_layout.addWidget(self.autosave_check)
+        layout.addWidget(self.autosave_check)
         
-        self.debug_check = QCheckBox("Debug mode (show overlay)")
+        self.debug_check = QCheckBox("Debug mode (show boundaries & overlay)")
         self.debug_check.setChecked(self.config.get('settings.debug_mode', False))
         self.debug_check.toggled.connect(self._on_debug_changed)
-        general_layout.addWidget(self.debug_check)
+        layout.addWidget(self.debug_check)
 
         self.show_stats_check = QCheckBox("Show Pet Stats Overlay")
         self.show_stats_check.setChecked(self.config.get('settings.show_stats', False))
         self.show_stats_check.toggled.connect(self._on_show_stats_changed)
-        general_layout.addWidget(self.show_stats_check)
-        
-        layout.addWidget(general_group)
+        layout.addWidget(self.show_stats_check)
         
         # Configuration management
         config_group = QGroupBox("Configuration")
@@ -358,6 +414,10 @@ class ControlPanel(QMainWindow):
         print_perf_btn.clicked.connect(self._print_performance)
         actions_layout.addWidget(print_perf_btn)
         
+        test_boundaries_btn = QPushButton("Test Boundary Detection")
+        test_boundaries_btn.clicked.connect(self._test_boundaries)
+        actions_layout.addWidget(test_boundaries_btn)
+        
         layout.addWidget(actions_group)
         
         # Spacer
@@ -398,7 +458,8 @@ class ControlPanel(QMainWindow):
             "✅ Phase 1 Step 1: Core Infrastructure (Complete)\n"
             "✅ Phase 1 Step 2: Control Panel Foundation (Complete)\n"
             "✅ Phase 1 Step 3: XML Parser & Animation System (Complete)\n"
-            "🔄 Phase 1 Step 4: Desktop Boundaries & Physics (In Progress)"
+            "✅ Phase 1 Step 4: Desktop Boundaries & Physics (Complete)\n"
+            "🔄 Phase 2: Window Interaction & Advanced Features (Next)"
         )
         status_text.setWordWrap(True)
         dev_layout.addWidget(status_text)
@@ -413,7 +474,8 @@ class ControlPanel(QMainWindow):
             f"Assets Directory: {AppConstants.ASSETS_DIR}\n"
             f"Config File: {self.config.config_file}\n"
             f"Target FPS: {AppConstants.TARGET_FPS}\n"
-            f"Default Sprite Size: {AppConstants.DEFAULT_SPRITE_SIZE[0]}x{AppConstants.DEFAULT_SPRITE_SIZE[1]}"
+            f"Default Sprite Size: {AppConstants.DEFAULT_SPRITE_SIZE[0]}x{AppConstants.DEFAULT_SPRITE_SIZE[1]}\n"
+            f"Boundary Colors: Ground=Blue, Walls=Purple"
         )
         tech_info.setWordWrap(True)
         tech_layout.addWidget(tech_info)
@@ -427,12 +489,21 @@ class ControlPanel(QMainWindow):
     
     def _load_settings(self) -> None:
         """Load settings into UI components"""
-        # Settings are loaded in individual widget creation
-        # Update sliders and spinboxes with current config values
+        # Load general settings
         self.volume_slider.setValue(self.config.get('settings.volume', 70))
         self.freq_slider.setValue(self.config.get('settings.behavior_frequency', 50))
         
-        # Set values for physics sliders and update their labels
+        # Load boundary settings
+        self.left_wall_slider.setValue(self.config.get('boundaries.left_wall_percent', 5))
+        self.right_wall_slider.setValue(self.config.get('boundaries.right_wall_percent', 95))
+        self.ground_slider.setValue(self.config.get('boundaries.ground_percent', 90))
+        
+        # Update boundary labels
+        self._on_left_wall_changed(self.left_wall_slider.value())
+        self._on_right_wall_changed(self.right_wall_slider.value())
+        self._on_ground_changed(self.ground_slider.value())
+        
+        # Load physics settings
         gravity_val = self.config.get('settings.physics_gravity_acceleration', 980)
         self.gravity_spin.setValue(gravity_val)
         self.gravity_label.setText(f"{gravity_val}")
@@ -441,25 +512,68 @@ class ControlPanel(QMainWindow):
         self.air_res_slider.setValue(int(air_res_val * 1000))
         self.air_res_label.setText(f"{air_res_val:.3f}")
 
-        bounce_coeff_val = self.config.get('settings.physics_bounce_coefficient', 0.2) # Updated default here
+        bounce_coeff_val = self.config.get('settings.physics_bounce_coefficient', 0.2)
         self.bounce_coeff_slider.setValue(int(bounce_coeff_val * 100))
         self.bounce_coeff_label.setText(f"{bounce_coeff_val:.2f}")
 
-        throw_mult_val = self.config.get('settings.physics_drag_throw_multiplier', 6.0) # Updated default here
+        throw_mult_val = self.config.get('settings.physics_drag_throw_multiplier', 6.0)
         self.throw_mult_slider.setValue(int(throw_mult_val * 10))
         self.throw_mult_label.setText(f"{throw_mult_val:.1f}")
 
+        # Load checkboxes
         self.boundaries_check.setChecked(self.config.get('settings.screen_boundaries', True))
         self.autosave_check.setChecked(self.config.get('settings.auto_save', True))
         self.debug_check.setChecked(self.config.get('settings.debug_mode', False))
         self.show_stats_check.setChecked(self.config.get('settings.show_stats', False))
+        self.wall_climbing_check.setChecked(self.config.get('boundaries.wall_climbing_enabled', True))
+        self.corner_bounce_check.setChecked(self.config.get('boundaries.corner_bounce_enabled', True))
 
+        # Update slider labels
         self._on_volume_changed(self.volume_slider.value())
         self._on_frequency_changed(self.freq_slider.value())
         
         saved_sprite = self.config.get('ui.selected_sprite')
         if saved_sprite and saved_sprite in self.sprite_packs:
             self.sprite_combo.setCurrentText(saved_sprite)
+    
+    # NEW: Boundary setting handlers
+    def _on_left_wall_changed(self, value: int) -> None:
+        """Handle left wall slider change"""
+        self.config.set('boundaries.left_wall_percent', value)
+        self.left_wall_label.setText(f"{value}%")
+        self.settings_changed.emit('left_wall_percent', value)
+        
+        # Ensure left wall doesn't exceed right wall
+        if value >= self.right_wall_slider.value() - 10:  # Keep 10% minimum gap
+            new_right = min(100, value + 20)
+            self.right_wall_slider.setValue(new_right)
+    
+    def _on_right_wall_changed(self, value: int) -> None:
+        """Handle right wall slider change"""
+        self.config.set('boundaries.right_wall_percent', value)
+        self.right_wall_label.setText(f"{value}%")
+        self.settings_changed.emit('right_wall_percent', value)
+        
+        # Ensure right wall doesn't go below left wall
+        if value <= self.left_wall_slider.value() + 10:  # Keep 10% minimum gap
+            new_left = max(0, value - 20)
+            self.left_wall_slider.setValue(new_left)
+    
+    def _on_ground_changed(self, value: int) -> None:
+        """Handle ground slider change"""
+        self.config.set('boundaries.ground_percent', value)
+        self.ground_label.setText(f"{value}%")
+        self.settings_changed.emit('ground_percent', value)
+    
+    def _on_wall_climbing_changed(self, checked: bool) -> None:
+        """Handle wall climbing checkbox change"""
+        self.config.set('boundaries.wall_climbing_enabled', checked)
+        self.settings_changed.emit('wall_climbing_enabled', checked)
+    
+    def _on_corner_bounce_changed(self, checked: bool) -> None:
+        """Handle corner bounce checkbox change"""
+        self.config.set('boundaries.corner_bounce_enabled', checked)
+        self.settings_changed.emit('corner_bounce_enabled', checked)
 
     def _on_sprite_changed(self, sprite_name: str) -> None:
         """Handle sprite selection change"""
@@ -538,40 +652,7 @@ class ControlPanel(QMainWindow):
     def _reload_config(self) -> None:
         """Reload configuration from file"""
         self.config.config = self.config.load_config()
-        
-        # Update UI with reloaded settings
-        self.volume_slider.setValue(self.config.get('settings.volume', 70))
-        self.freq_slider.setValue(self.config.get('settings.behavior_frequency', 50))
-        self.boundaries_check.setChecked(self.config.get('settings.screen_boundaries', True))
-        self.autosave_check.setChecked(self.config.get('settings.auto_save', True))
-        self.debug_check.setChecked(self.config.get('settings.debug_mode', False))
-        self.show_stats_check.setChecked(self.config.get('settings.show_stats', False))
-
-        # Reload values for physics sliders and update their labels
-        gravity_val = self.config.get('settings.physics_gravity_acceleration', 980)
-        self.gravity_spin.setValue(gravity_val)
-        self.gravity_label.setText(f"{gravity_val}")
-
-        air_res_val = self.config.get('settings.physics_air_resistance_factor', 0.001)
-        self.air_res_slider.setValue(int(air_res_val * 1000))
-        self.air_res_label.setText(f"{air_res_val:.3f}")
-
-        bounce_coeff_val = self.config.get('settings.physics_bounce_coefficient', 0.2) # Updated default here
-        self.bounce_coeff_slider.setValue(int(bounce_coeff_val * 100))
-        self.bounce_coeff_label.setText(f"{bounce_coeff_val:.2f}")
-
-        throw_mult_val = self.config.get('settings.physics_drag_throw_multiplier', 6.0) # Updated default here
-        self.throw_mult_slider.setValue(int(throw_mult_val * 10))
-        self.throw_mult_label.setText(f"{throw_mult_val:.1f}")
-        
-        # Update labels
-        self._on_volume_changed(self.volume_slider.value())
-        self._on_frequency_changed(self.freq_slider.value())
-        
-        saved_sprite = self.config.get('ui.selected_sprite')
-        if saved_sprite and saved_sprite in self.sprite_packs:
-            self.sprite_combo.setCurrentText(saved_sprite)
-        
+        self._load_settings()
         print("Configuration reloaded")
     
     def _reset_config(self) -> None:
@@ -590,6 +671,22 @@ class ControlPanel(QMainWindow):
         """Print performance info to console"""
         self.pygame_window._print_performance_info()
     
+    def _test_boundaries(self) -> None:
+        """Test boundary detection and display info"""
+        boundaries = self.config.get_boundary_pixels(
+            self.pygame_window.screen_width, 
+            self.pygame_window.screen_height
+        )
+        
+        print(f"=== Boundary Test ===")
+        print(f"Screen Size: {self.pygame_window.screen_width}x{self.pygame_window.screen_height}")
+        print(f"Left Wall: {boundaries['left_wall_x']}px ({self.config.get('boundaries.left_wall_percent')}%)")
+        print(f"Right Wall: {boundaries['right_wall_x']}px ({self.config.get('boundaries.right_wall_percent')}%)")
+        print(f"Ground: {boundaries['ground_y']}px ({self.config.get('boundaries.ground_percent')}%)")
+        print(f"Playable Width: {boundaries['right_wall_x'] - boundaries['left_wall_x']}px")
+        print(f"Playable Height: {boundaries['ground_y'] - boundaries['ceiling_y']}px")
+        print("==================")
+    
     def _refresh_pet_info(self) -> None:
         """Refresh pet information display"""
         pets_info = self.pygame_window.get_pets_info()
@@ -603,7 +700,7 @@ class ControlPanel(QMainWindow):
             info_text += f"Pet ID: {pet_info['pet_id']}\n"
             info_text += f"  Sprite: {pet_info['sprite_name']}\n"
             info_text += f"  Position: ({pet_info['position'][0]:.0f}, {pet_info['position'][1]:.0f})\n"
-            info_text += f"  Velocity: ({pet_info['velocity'][0]:.0f}, {pet_info['velocity'][1]:.0f})\n" # Added velocity
+            info_text += f"  Velocity: ({pet_info['velocity'][0]:.0f}, {pet_info['velocity'][1]:.0f})\n"
             info_text += f"  State: {pet_info['state']}\n"
             info_text += f"  Health: {pet_info['stats']['health']:.0f}\n"
             info_text += f"  Happiness: {pet_info['stats']['happiness']:.0f}\n"
@@ -628,7 +725,7 @@ class ControlPanel(QMainWindow):
             self.perf_fps_label.setText(f"FPS: {perf_info['fps']:.1f}")
             self.perf_memory_label.setText(f"Memory: {perf_info['memory_usage_mb']:.1f}MB")
             self.perf_cache_label.setText(f"Sprite Cache: {perf_info['sprite_cache']['cached_sprites']} sprites")
-            self._refresh_pet_info() # Refresh pet info in monitoring tab
+            self._refresh_pet_info()
     
     def closeEvent(self, event) -> None:
         """Handle window close event"""

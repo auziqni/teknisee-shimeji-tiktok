@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
 """
-pet_behavior.py - Enhanced pet behavior dengan Pinch Animation & Random Behavior
+pet_behavior.py - Enhanced with boundary system integration
 
-Menambahkan:
-1. Pinch animation yang smooth berdasarkan mouse position
-2. Random behavior berdasarkan XML frequency 
-3. Multi-monitor support
+Integrates boundary collision detection, wall climbing, and corner bouncing
+with the existing physics and animation system.
 """
 
 import pygame
 import time
 import random
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Optional, Tuple, Dict, Any, List, TYPE_CHECKING
 from enum import Enum
 from dataclasses import dataclass
 
 from config import AppConstants, get_config
 from sprite_loader import get_sprite_loader
+
+if TYPE_CHECKING:
+    from gui_manager import BoundaryManager
 
 # Import animation system dengan error handling
 try:
@@ -40,14 +41,14 @@ class PetState(Enum):
     SITTING = "Sit"
     RUNNING = "Run"
     
-    # Special states
+    # Physics states
     DRAGGING = "Pinched"
     FALLING = "Falling"
     JUMPING = "Jumping"
     THROWN = "Thrown"
     BOUNCING = "Bouncing"
     
-    # Wall/ceiling interactions  
+    # Wall/ceiling interactions (enhanced)
     GRAB_WALL = "GrabWall"
     CLIMB_WALL = "ClimbWall"
     GRAB_CEILING = "GrabCeiling"
@@ -74,10 +75,12 @@ class PetStats:
     walks_taken: int = 0
     times_petted: int = 0
     special_actions_performed: int = 0
+    wall_climbs: int = 0  # NEW: wall climbing counter
+    corner_bounces: int = 0  # NEW: corner bounce counter
 
 
 class DesktopPet:
-    """Enhanced desktop pet dengan Pinch Animation, Random Behavior, dan Multi-Monitor"""
+    """Enhanced desktop pet dengan boundary system integration"""
     
     def __init__(self, sprite_name: str, x: int = 100, y: int = 100, pet_id: str = None):
         self.sprite_name = sprite_name
@@ -91,33 +94,30 @@ class DesktopPet:
         self.velocity_x = 0.0
         self.velocity_y = 0.0
         
-        # Multi-monitor support
-        self.monitors = []
-        self.current_monitor = None
-        
         # State management
         self.state = PetState.IDLE
         self.previous_state = PetState.IDLE
         self.state_timer = 0.0
         self.state_duration = 0.0
         
-        # Animation system
+        # NEW: Boundary system integration
+        self.boundary_manager: Optional['BoundaryManager'] = None
+        self.on_wall = False
+        self.wall_side = None  # 'left' or 'right'
+        self.wall_climb_timer = 0.0
+        
+        # Animation system - with fallback
         self.animation_manager = None
         if ANIMATION_SYSTEM_AVAILABLE and create_animation_manager:
             try:
                 self.animation_manager = create_animation_manager(sprite_name)
                 if self.animation_manager:
-                    print(f"✅ Animation system loaded for {sprite_name}")
+                    print(f"Animation system loaded for {sprite_name}")
                 else:
-                    print(f"⚠️ Failed to create animation manager for {sprite_name}")
+                    print(f"Warning: Failed to create animation manager for {sprite_name}")
             except Exception as e:
                 print(f"Error creating animation manager: {e}")
                 self.animation_manager = None
-        
-        # Pinch animation system
-        self.pinch_sprites = self._load_pinch_sprites()
-        self.pinch_animation_active = False
-        self.mouse_relative_x = 0.0  # Mouse position relative to pet center
         
         # Interaction handling
         self.dragging = False
@@ -132,16 +132,14 @@ class DesktopPet:
         self.on_ground = True
         self.gravity_enabled = True
         
-        # Configuration and Physics
+        # Configuration and Physics parameters
         self.config = get_config()
         self.update_physics_parameters()
         
-        # Random behavior system
+        # Behavioral properties
         self.behavior_timer = 0.0
         self.idle_timer = 0.0
         self.action_queue = []
-        self.behavior_weights = self._load_behavior_weights()
-        self.next_behavior_time = random.uniform(2.0, 8.0)  # Random initial delay
         
         # Sprite and rendering
         self.sprite_loader = get_sprite_loader()
@@ -160,101 +158,23 @@ class DesktopPet:
         # Initialize animation
         self._initialize_animation()
         
-        print(f"🐾 Enhanced pet created: {self.pet_id} at ({x}, {y}) with pinch & random behavior")
+        # Lifecycle management
+        self.running = True
+        
+        print(f"Enhanced pet created: {self.pet_id} at ({x}, {y})")
 
-    def _load_pinch_sprites(self) -> Dict[str, str]:
-        """Load pinch animation sprite mappings"""
-        return {
-            'far_left': 'shime9.png',      # Mouse far to left of pet
-            'left': 'shime7.png',          # Mouse to left of pet  
-            'near_left': 'shime5.png',     # Mouse near left of pet
-            'center': 'shime5a.png',       # Mouse at center of pet
-            'near_right': 'shime6.png',    # Mouse near right of pet
-            'right': 'shime8.png',         # Mouse to right of pet
-            'far_right': 'shime10.png'     # Mouse far to right of pet
-        }
-    
-    def _load_behavior_weights(self) -> Dict[str, int]:
-        """Load behavior weights dari XML atau fallback defaults"""
-        behavior_weights = {
-            # Basic behaviors (high frequency)
-            'WALKING': 200,
-            'RUNNING': 100,
-            'SITTING': 200,
-            
-            # Special behaviors (lower frequency)
-            'POSE': 30,
-            'EAT_BERRY': 45,
-            'THROW_NEEDLE': 30,
-            'WATCH': 45,
-            
-            # Rest behavior
-            'IDLE': 150
-        }
-        
-        # Try to load from XML if available
-        try:
-            from utils.xml_parser import XMLParser
-            xml_parser = XMLParser()
-            if xml_parser.parse_sprite_pack(self.sprite_name):
-                behaviors = xml_parser.get_all_behaviors()
-                
-                # Update weights berdasarkan XML frequency
-                for behavior_name, behavior_data in behaviors.items():
-                    if not behavior_data.hidden and behavior_data.frequency > 0:
-                        # Map XML behavior names ke PetState names
-                        state_name = self._map_behavior_to_state(behavior_name)
-                        if state_name and hasattr(PetState, state_name):
-                            behavior_weights[state_name] = behavior_data.frequency
-                
-                print(f"✅ Loaded {len(behaviors)} behavior weights from XML")
-        except Exception as e:
-            print(f"⚠️ Using fallback behavior weights: {e}")
-        
-        return behavior_weights
-    
-    def _map_behavior_to_state(self, behavior_name: str) -> Optional[str]:
-        """Map XML behavior names ke PetState enum names"""
-        behavior_mapping = {
-            'StandUp': 'IDLE',
-            'SitDown': 'SITTING', 
-            'WalkAlongWorkAreaFloor': 'WALKING',
-            'RunAlongWorkAreaFloor': 'RUNNING',
-            'Pose': 'POSE',
-            'EatBerry': 'EAT_BERRY',
-            'ThrowNeedle': 'THROW_NEEDLE',
-            'WatchShows (CanEnd)': 'WATCH'
-        }
-        return behavior_mapping.get(behavior_name)
-    
-    def set_monitor_bounds(self, monitors: List[Dict[str, int]]) -> None:
-        """Set multi-monitor boundaries"""
-        self.monitors = monitors
-        self.current_monitor = self._get_current_monitor()
-        print(f"Pet {self.pet_id} set to monitor bounds: {len(monitors)} monitors")
-    
-    def _get_current_monitor(self) -> Dict[str, int]:
-        """Get current monitor based on pet position"""
-        if not self.monitors:
-            return {'left': 0, 'top': 0, 'width': 1920, 'height': 1080, 'right': 1920, 'bottom': 1080}
-        
-        # Find which monitor contains the pet
-        for monitor in self.monitors:
-            if (monitor['left'] <= self.x < monitor['right'] and 
-                monitor['top'] <= self.y < monitor['bottom']):
-                return monitor
-        
-        # Default to first monitor if not found
-        return self.monitors[0]
+    def set_boundary_manager(self, boundary_manager: 'BoundaryManager') -> None:
+        """Set the boundary manager for collision detection"""
+        self.boundary_manager = boundary_manager
+        print(f"Pet {self.pet_id} connected to boundary system")
 
     def update_physics_parameters(self) -> None:
         """Updates physics parameters from the global config."""
-        self.GRAVITY_ACCELERATION = self.config.get('settings.physics_gravity_acceleration')
-        self.AIR_RESISTANCE_FACTOR = self.config.get('settings.physics_air_resistance_factor')
-        self.BOUNCE_COEFFICIENT = self.config.get('settings.physics_bounce_coefficient')
-        self.MIN_BOUNCE_VELOCITY = self.config.get('settings.physics_min_bounce_velocity')
-        self.DRAG_THROW_MULTIPLIER = self.config.get('settings.physics_drag_throw_multiplier')
-        print(f"Pet {self.pet_id} physics parameters updated.")
+        self.GRAVITY_ACCELERATION = self.config.get('settings.physics_gravity_acceleration', 980)
+        self.AIR_RESISTANCE_FACTOR = self.config.get('settings.physics_air_resistance_factor', 0.001)
+        self.BOUNCE_COEFFICIENT = self.config.get('settings.physics_bounce_coefficient', 0.2)
+        self.MIN_BOUNCE_VELOCITY = self.config.get('settings.physics_min_bounce_velocity', 100)
+        self.DRAG_THROW_MULTIPLIER = self.config.get('settings.physics_drag_throw_multiplier', 6.0)
     
     def _load_current_sprite(self) -> pygame.Surface:
         """Load current sprite image dengan error handling"""
@@ -283,32 +203,23 @@ class DesktopPet:
                 print(f"Error initializing animation: {e}")
                 self.animation_manager = None
     
-    def update(self, dt: float, monitors: List[Dict[str, int]]) -> None:
-        """Enhanced update dengan pinch animation, random behavior, dan multi-monitor"""
-        # Update monitor info
-        self.monitors = monitors
-        self.current_monitor = self._get_current_monitor()
-        
-        # Update timers
+    def update(self, dt: float, screen_bounds: Tuple[int, int]) -> None:
+        """Enhanced update dengan boundary system integration"""
         self.state_timer += dt
         self.behavior_timer += dt
         self.stats.time_in_current_state += dt
+        self.wall_climb_timer += dt
         
-        # Update animation system dengan pinch support
+        # Update animation system
         if self.animation_manager:
             try:
-                if self.state == PetState.DRAGGING and self.pinch_animation_active:
-                    # Use pinch animation
-                    self.current_sprite = self._get_pinch_sprite()
-                else:
-                    # Use normal animation
-                    self.current_sprite, anim_velocity = self.animation_manager.update(dt)
-                    
-                    # Apply animation velocity for walking/running
-                    if not self.dragging and self.state in [PetState.WALKING, PetState.RUNNING]:
-                        vel_x = anim_velocity[0] if self.facing_right else -anim_velocity[0]
-                        self.velocity_x = vel_x
-                        self.velocity_y = anim_velocity[1]
+                self.current_sprite, anim_velocity = self.animation_manager.update(dt)
+                
+                # Use animation velocity only for specific states
+                if not self.dragging and self.state in [PetState.WALKING, PetState.RUNNING]:
+                    vel_x = anim_velocity[0] if self.facing_right else -anim_velocity[0]
+                    self.velocity_x = vel_x
+                    self.velocity_y = anim_velocity[1]
                 
                 if self.current_sprite:
                     self.image = self.current_sprite
@@ -318,15 +229,15 @@ class DesktopPet:
         else:
             self._update_fallback_animation(dt)
         
-        # Update position based on velocity
+        # Update position based on velocity (with boundary integration)
         if not self.dragging:
-            self._update_movement_multimonitor(dt)
+            self._update_movement_with_boundaries(dt, screen_bounds)
         
         # Update state-specific behavior
         self._update_state_behavior(dt)
         
-        # Update random behavioral AI
-        self._update_random_behavior_ai(dt)
+        # Update behavioral AI
+        self._update_behavioral_ai(dt)
         
         # Update statistics  
         self._update_stats(dt)
@@ -335,108 +246,179 @@ class DesktopPet:
         self.rect.x = int(self.x)
         self.rect.y = int(self.y)
     
-    def _get_pinch_sprite(self) -> pygame.Surface:
-        """Get appropriate pinch sprite berdasarkan mouse position dengan debug info"""
-        try:
-            # Determine which pinch sprite to use based on mouse_relative_x
-            sprite_key = ""
-            if self.mouse_relative_x < -50:
-                sprite_key = 'far_left'
-                sprite_name = self.pinch_sprites['far_left']
-            elif self.mouse_relative_x < -30:
-                sprite_key = 'left'
-                sprite_name = self.pinch_sprites['left']
-            elif self.mouse_relative_x < -15:
-                sprite_key = 'near_left'
-                sprite_name = self.pinch_sprites['near_left']
-            elif self.mouse_relative_x < 15:
-                sprite_key = 'center'
-                sprite_name = self.pinch_sprites['center']
-            elif self.mouse_relative_x < 30:
-                sprite_key = 'near_right'
-                sprite_name = self.pinch_sprites['near_right']
-            elif self.mouse_relative_x < 50:
-                sprite_key = 'right'
-                sprite_name = self.pinch_sprites['right']
-            else:
-                sprite_key = 'far_right'
-                sprite_name = self.pinch_sprites['far_right']
-            
-            # Debug: print pinch changes
-            if hasattr(self, '_last_pinch_key') and self._last_pinch_key != sprite_key:
-                print(f"🤏 Pinch changed: {sprite_key} (offset: {self.mouse_relative_x:.0f})")
-            self._last_pinch_key = sprite_key
-            
-            # Load and return sprite
-            sprite = self.sprite_loader.load_sprite(self.sprite_name, sprite_name)
-            
-            # Flip sprite if facing left
-            if not self.facing_right:
-                sprite = pygame.transform.flip(sprite, True, False)
-            
-            return sprite
-            
-        except Exception as e:
-            print(f"Error loading pinch sprite {sprite_key}: {e}")
-            # Fallback to center pinch sprite
-            try:
-                fallback_sprite = self.sprite_loader.load_sprite(self.sprite_name, self.pinch_sprites['center'])
-                if not self.facing_right:
-                    fallback_sprite = pygame.transform.flip(fallback_sprite, True, False)
-                return fallback_sprite
-            except:
-                # Ultimate fallback to current loaded sprite
-                return self._load_current_sprite()
-    
-    def _update_fallback_animation(self, dt: float) -> None:
-        """Enhanced fallback animation dengan pinch support dan falling fix"""
-        self.animation_timer += dt
-        
-        # Handle pinch animation in fallback mode
-        if self.state == PetState.DRAGGING and self.pinch_animation_active:
-            self.current_sprite = self._get_pinch_sprite()
-            if self.current_sprite:
-                self.image = self.current_sprite
+    def _update_movement_with_boundaries(self, dt: float, screen_bounds: Tuple[int, int]) -> None:
+        """Enhanced movement dengan boundary collision detection"""
+        if not self.boundary_manager:
+            # Fallback to old boundary system
+            self._update_movement_fallback(dt, screen_bounds)
             return
         
-        # Normal fallback animation dengan timing yang tepat
-        animation_speed = 0.3 if self.state in [PetState.FALLING, PetState.THROWN] else 0.5
+        # Apply gravity if enabled and not on ground/wall
+        if self.gravity_enabled and not self.on_ground and not self.on_wall:
+            self.velocity_y += self.GRAVITY_ACCELERATION * dt
+            
+            # Apply air resistance
+            self.velocity_x *= (1 - self.AIR_RESISTANCE_FACTOR * dt)
+            self.velocity_y *= (1 - self.AIR_RESISTANCE_FACTOR * dt)
         
-        if self.animation_timer > animation_speed:
-            self.animation_frame = (self.animation_frame + 1) % 2
-            self.animation_timer = 0.0
+        # Store previous position for collision detection
+        prev_x = self.x
+        prev_y = self.y
+        
+        # Update position
+        self.x += self.velocity_x * dt
+        self.y += self.velocity_y * dt
+        
+        # Check boundary collisions
+        if self.config.get('settings.screen_boundaries', True):
+            collision = self.boundary_manager.check_boundary_collision(
+                self.x, self.y, self.rect.width, self.rect.height
+            )
             
-            # Load different sprite based on state dengan falling fix
-            if self.state == PetState.WALKING:
-                frame_sprites = ["shime2.png", "shime3.png"]
-            elif self.state == PetState.SITTING:
-                frame_sprites = ["shime11.png", "shime11a.png"]
-            elif self.state == PetState.RUNNING:
-                frame_sprites = ["shime3e.png", "shime3f.png"]
-            elif self.state == PetState.FALLING:
-                # Proper falling animation
-                frame_sprites = ["shime4.png", "shime4.png"]  # Consistent falling pose
-            elif self.state == PetState.THROWN:
-                # Thrown animation (spinning effect)
-                frame_sprites = ["shime4.png", "shime22.png"] if self.animation_frame == 0 else ["shime22.png", "shime4.png"]
-            elif self.state == PetState.BOUNCING:
-                # Bouncing animation
-                frame_sprites = ["shime18.png", "shime19.png"]
-            else:  # IDLE and other states
-                frame_sprites = ["shime1.png", "shime1a.png"]
-            
-            if self.animation_frame < len(frame_sprites):
-                new_sprite = frame_sprites[self.animation_frame]
-                if new_sprite != self.current_sprite_name:
-                    self.current_sprite_name = new_sprite
-                    self.image = self._load_current_sprite()
-                    
-                    # Flip sprite if facing left
-                    if not self.facing_right:
-                        self.image = pygame.transform.flip(self.image, True, False)
+            self._handle_boundary_collisions(collision, prev_x, prev_y)
     
-    def _update_movement_multimonitor(self, dt: float) -> None:
-        """Enhanced movement dengan multi-monitor support"""
+    def _handle_boundary_collisions(self, collision: Dict[str, bool], prev_x: float, prev_y: float) -> None:
+        """Handle boundary collisions with simple corner turn-around logic"""
+        wall_climbing_enabled = self.config.get('boundaries.wall_climbing_enabled', True)
+        
+        # PRIORITY 1: Handle ground collision FIRST
+        if collision['ground']:
+            boundaries = self.boundary_manager.boundaries
+            self.y = boundaries['ground_y'] - self.rect.height
+            
+            if abs(self.velocity_y) > self.MIN_BOUNCE_VELOCITY:
+                self.velocity_y *= -self.BOUNCE_COEFFICIENT
+                self.change_state(PetState.BOUNCING)
+            else:
+                self.velocity_y = 0
+                self.on_ground = True
+                self.on_wall = False
+                if self.state in [PetState.FALLING, PetState.THROWN, PetState.BOUNCING]:
+                    self.change_state(PetState.IDLE)
+        
+        # PRIORITY 2: Handle wall collisions with SIMPLE turn-around logic
+        wall_hit = collision['left_wall'] or collision['right_wall']
+        
+        if wall_hit:
+            boundaries = self.boundary_manager.boundaries
+            
+            # Position correction
+            if collision['left_wall']:
+                self.x = boundaries['left_wall_x']
+                wall_side = 'left'
+            else:  # right wall
+                self.x = boundaries['right_wall_x'] - self.rect.width
+                wall_side = 'right'
+            
+            # SIMPLE LOGIC: Just turn around and stop oscillation
+            if self.on_ground:
+                # Ground-based: Simple turn around
+                self.velocity_x = 0  # Stop horizontal movement to prevent oscillation
+                self._change_direction()  # Turn around
+                print(f"Pet {self.pet_id} turned around at {wall_side} wall")
+                
+                # Set a brief pause to prevent immediate re-collision
+                self.behavior_timer = 0.0  # Reset behavior timer
+                
+            else:
+                # Air-based: Reserved for future wall climbing development
+                # For now, simple bounce
+                self.velocity_x *= -self.BOUNCE_COEFFICIENT
+                if abs(self.velocity_x) < self.MIN_BOUNCE_VELOCITY:
+                    self.velocity_x = 0
+                self._change_direction()
+                
+                # TODO: Future wall climbing logic goes here
+                # if wall_climbing_enabled:
+                #     self._start_wall_climbing(wall_side)
+        
+        # Handle ceiling collision (for future use)
+        if collision['ceiling']:
+            boundaries = self.boundary_manager.boundaries
+            self.y = boundaries['ceiling_y']
+            self.velocity_y = max(0, self.velocity_y)  # Stop upward movement
+    
+    def _handle_wall_bounce(self, side: str) -> None:
+        """Handle simple wall bounce when pet is on ground"""
+        boundaries = self.boundary_manager.boundaries
+        
+        if side == 'left':
+            self.x = boundaries['left_wall_x']
+        else:  # right
+            self.x = boundaries['right_wall_x'] - self.rect.width
+        
+        # Simple bounce physics
+        self.velocity_x *= -self.BOUNCE_COEFFICIENT
+        if abs(self.velocity_x) < self.MIN_BOUNCE_VELOCITY:
+            self.velocity_x = 0
+        
+        self._change_direction()
+        print(f"Pet {self.pet_id} bounced off {side} wall while on ground")
+    
+    def _handle_wall_collision(self, side: str, wall_climbing_enabled: bool) -> None:
+        """Handle collision with left or right wall (for wall climbing when in air)"""
+        boundaries = self.boundary_manager.boundaries
+        
+        if side == 'left':
+            self.x = boundaries['left_wall_x']
+        else:  # right
+            self.x = boundaries['right_wall_x'] - self.rect.width
+        
+        # Wall climbing logic (only when not on ground)
+        if wall_climbing_enabled and self.state not in [PetState.DRAGGING] and not self.on_ground:
+            # Start wall climbing if moving towards wall
+            if (side == 'left' and self.velocity_x < 0) or (side == 'right' and self.velocity_x > 0):
+                self.on_wall = True
+                self.wall_side = side
+                self.on_ground = False
+                self.gravity_enabled = False
+                self.velocity_x = 0
+                
+                # Start climbing animation
+                if self.state != PetState.CLIMB_WALL:
+                    self.change_state(PetState.GRAB_WALL)
+                    self.stats.wall_climbs += 1
+                    self.wall_climb_timer = 0.0
+        else:
+            # Regular wall bounce
+            self.velocity_x *= -self.BOUNCE_COEFFICIENT
+            if abs(self.velocity_x) < self.MIN_BOUNCE_VELOCITY:
+                self.velocity_x = 0
+            self._change_direction()
+            self.on_wall = False
+    
+    def _handle_corner_bounce(self, collision: Dict[str, bool]) -> None:
+        """Handle corner bounce with enhanced physics"""
+        # Determine bounce direction based on which corner
+        if collision['left_wall'] and collision['ground']:
+            # Bottom-left corner - bounce right and up
+            self.velocity_x = abs(self.velocity_x) * self.BOUNCE_COEFFICIENT * 2
+            self.velocity_y = -abs(self.velocity_y) * self.BOUNCE_COEFFICIENT
+            self.facing_right = True
+        elif collision['right_wall'] and collision['ground']:
+            # Bottom-right corner - bounce left and up
+            self.velocity_x = -abs(self.velocity_x) * self.BOUNCE_COEFFICIENT * 2
+            self.velocity_y = -abs(self.velocity_y) * self.BOUNCE_COEFFICIENT
+            self.facing_right = False
+        
+        # Update animation facing direction
+        if self.animation_manager:
+            try:
+                self.animation_manager.set_facing_direction(self.facing_right)
+            except:
+                pass
+        
+        self.change_state(PetState.BOUNCING)
+        self.stats.corner_bounces += 1
+        self.on_ground = False
+        self.on_wall = False
+        self.gravity_enabled = True
+        print(f"Pet {self.pet_id} corner bounce! Stats: {self.stats.corner_bounces} bounces")
+    
+    def _update_movement_fallback(self, dt: float, screen_bounds: Tuple[int, int]) -> None:
+        """Fallback movement system when boundary manager not available"""
+        screen_width, screen_height = screen_bounds
+        
         # Apply gravity if enabled and not on ground
         if self.gravity_enabled and not self.on_ground:
             self.velocity_y += self.GRAVITY_ACCELERATION * dt
@@ -449,32 +431,27 @@ class DesktopPet:
         self.x += self.velocity_x * dt
         self.y += self.velocity_y * dt
         
-        # Multi-monitor boundary collision
+        # Basic screen boundary collision
         if self.config.get('settings.screen_boundaries', True):
-            monitor = self.current_monitor or self.monitors[0] if self.monitors else {
-                'left': 0, 'top': 0, 'right': 1920, 'bottom': 1080
-            }
-            
             # Horizontal boundaries
-            if self.x < monitor['left']:
-                self.x = monitor['left']
+            if self.x < 0:
+                self.x = 0
                 self.velocity_x *= -self.BOUNCE_COEFFICIENT
                 if abs(self.velocity_x) < self.MIN_BOUNCE_VELOCITY: 
                     self.velocity_x = 0
                 self._change_direction()
-            elif self.x > monitor['right'] - self.rect.width:
-                self.x = monitor['right'] - self.rect.width
+            elif self.x > screen_width - self.rect.width:
+                self.x = screen_width - self.rect.width
                 self.velocity_x *= -self.BOUNCE_COEFFICIENT
                 if abs(self.velocity_x) < self.MIN_BOUNCE_VELOCITY: 
                     self.velocity_x = 0
                 self._change_direction()
             
-            # Ground collision (Floor)
-            ground_y = monitor['bottom'] - self.rect.height - AppConstants.SCREEN_MARGIN
+            # Ground collision
+            ground_y = screen_height - self.rect.height - AppConstants.SCREEN_MARGIN
             if self.y >= ground_y:
                 self.y = ground_y
                 
-                # Check for bounce
                 if abs(self.velocity_y) > self.MIN_BOUNCE_VELOCITY:
                     self.velocity_y *= -self.BOUNCE_COEFFICIENT
                     self.change_state(PetState.BOUNCING)
@@ -488,85 +465,41 @@ class DesktopPet:
                 if self.state not in [PetState.DRAGGING, PetState.FALLING, PetState.THROWN, PetState.BOUNCING]:
                     self.change_state(PetState.FALLING)
     
-    def _update_random_behavior_ai(self, dt: float) -> None:
-        """Enhanced random behavior AI dengan XML frequency-based selection"""
-        if self.state != PetState.IDLE or not self.on_ground:
-            return
+    def _update_fallback_animation(self, dt: float) -> None:
+        """Fallback animation system untuk compatibility"""
+        self.animation_timer += dt
         
-        # Check if it's time for next behavior
-        if self.behavior_timer >= self.next_behavior_time:
-            self.behavior_timer = 0.0
+        # Simple animation frame cycling
+        if self.animation_timer > 0.5:  # Change frame every 500ms
+            self.animation_frame = (self.animation_frame + 1) % 2
+            self.animation_timer = 0.0
             
-            # Calculate behavior probabilities based on stats and time
-            energy_factor = self.stats.energy / 100.0
-            happiness_factor = self.stats.happiness / 100.0
+            # Load different sprite based on state
+            if self.state == PetState.WALKING:
+                frame_sprites = ["shime2.png", "shime3.png"]
+            elif self.state == PetState.SITTING:
+                frame_sprites = ["shime11.png", "shime11a.png"]
+            elif self.state == PetState.RUNNING:
+                frame_sprites = ["shime3e.png", "shime3f.png"]
+            elif self.state in [PetState.FALLING, PetState.THROWN]:
+                frame_sprites = ["shime4.png", "shime4.png"]
+            elif self.state in [PetState.GRAB_WALL, PetState.CLIMB_WALL]:
+                frame_sprites = ["shime13.png", "shime13a.png"]  # Wall grab sprites
+            else:  # IDLE and other states
+                frame_sprites = ["shime1.png", "shime1a.png"]
             
-            # Adjust behavior weights based on pet stats
-            adjusted_weights = {}
-            for behavior_name, base_weight in self.behavior_weights.items():
-                weight = base_weight
-                
-                # Energy-based adjustments
-                if behavior_name in ['WALKING', 'RUNNING'] and energy_factor < 0.3:
-                    weight *= 0.5  # Less likely to walk/run when tired
-                elif behavior_name == 'SITTING' and energy_factor < 0.5:
-                    weight *= 1.5  # More likely to sit when low energy
-                
-                # Happiness-based adjustments
-                if behavior_name in ['POSE', 'EAT_BERRY', 'WATCH'] and happiness_factor > 0.7:
-                    weight *= 1.3  # More likely to do special actions when happy
-                
-                adjusted_weights[behavior_name] = max(1, int(weight))
-            
-            # Weighted random selection
-            selected_behavior = self._weighted_random_choice(adjusted_weights)
-            if selected_behavior:
-                self._execute_behavior(selected_behavior)
-            
-            # Set next behavior time (random interval)
-            base_interval = 60.0 / self.config.get('settings.behavior_frequency', 50)  # Convert frequency to interval
-            self.next_behavior_time = random.uniform(base_interval * 0.5, base_interval * 2.0)
-    
-    def _weighted_random_choice(self, weights: Dict[str, int]) -> Optional[str]:
-        """Weighted random selection dari behavior weights"""
-        if not weights:
-            return None
-        
-        total_weight = sum(weights.values())
-        if total_weight <= 0:
-            return None
-        
-        random_value = random.randint(1, total_weight)
-        current_weight = 0
-        
-        for behavior_name, weight in weights.items():
-            current_weight += weight
-            if random_value <= current_weight:
-                return behavior_name
-        
-        return None
-    
-    def _execute_behavior(self, behavior_name: str) -> None:
-        """Execute selected behavior"""
-        try:
-            if behavior_name == 'WALKING':
-                self._start_movement(PetState.WALKING)
-            elif behavior_name == 'RUNNING':
-                self._start_movement(PetState.RUNNING)
-            elif behavior_name == 'SITTING':
-                self.change_state(PetState.SITTING)
-            elif behavior_name in ['POSE', 'EAT_BERRY', 'THROW_NEEDLE', 'WATCH']:
-                state = getattr(PetState, behavior_name)
-                self.change_state(state)
-            elif behavior_name == 'IDLE':
-                self.change_state(PetState.IDLE)
-            
-            print(f"🎲 Pet {self.pet_id} executed random behavior: {behavior_name}")
-        except Exception as e:
-            print(f"Error executing behavior {behavior_name}: {e}")
+            if self.animation_frame < len(frame_sprites):
+                new_sprite = frame_sprites[self.animation_frame]
+                if new_sprite != self.current_sprite_name:
+                    self.current_sprite_name = new_sprite
+                    self.image = self._load_current_sprite()
+                    
+                    # Flip sprite if facing left
+                    if not self.facing_right:
+                        self.image = pygame.transform.flip(self.image, True, False)
     
     def _update_state_behavior(self, dt: float) -> None:
-        """Enhanced state behavior management"""
+        """Enhanced state behavior management with wall climbing"""
         if self.state == PetState.IDLE:
             if self.state_timer > 3.0:
                 self._decide_next_action()
@@ -581,6 +514,7 @@ class DesktopPet:
                 except:
                     animation_completed = True
             
+            # Reduce speed as we approach target
             if distance_to_target < 50:
                 self.velocity_x *= 0.9
             
@@ -590,11 +524,54 @@ class DesktopPet:
                 self.stats.walks_taken += 1
         
         elif self.state == PetState.SITTING:
+            # Sitting behavior - gradually restore energy
             self.stats.energy = min(100, self.stats.energy + 10 * dt)
-            if self.state_timer > 5.0:
+            if self.state_timer > 5.0:  # Sit for 5 seconds
                 self.change_state(PetState.IDLE)
         
+        elif self.state == PetState.GRAB_WALL:
+            # Wall grabbing - wait before climbing
+            if self.state_timer > 1.0:  # Grab for 1 second
+                if self.config.get('boundaries.wall_climbing_enabled', True):
+                    self.change_state(PetState.CLIMB_WALL)
+                else:
+                    # Fall off wall if climbing disabled
+                    self.on_wall = False
+                    self.wall_side = None
+                    self.gravity_enabled = True
+                    self.change_state(PetState.FALLING)
+        
+        elif self.state == PetState.CLIMB_WALL:
+            # Wall climbing behavior
+            if self.on_wall and self.boundary_manager:
+                # Climb up slowly
+                climb_speed = 20  # pixels per second
+                self.y -= climb_speed * dt
+                
+                # Check if reached top or should stop climbing
+                boundaries = self.boundary_manager.boundaries
+                if self.y <= boundaries['ceiling_y'] + 50:  # Near ceiling
+                    # Transition to ceiling grab or fall
+                    self.on_wall = False
+                    self.wall_side = None
+                    self.gravity_enabled = True
+                    self.change_state(PetState.FALLING)
+                elif self.state_timer > 5.0:  # Climb for max 5 seconds
+                    # Get tired and fall
+                    self.on_wall = False
+                    self.wall_side = None
+                    self.gravity_enabled = True
+                    self.velocity_y = 0  # Start falling gently
+                    self.change_state(PetState.FALLING)
+            else:
+                # Lost wall contact
+                self.on_wall = False
+                self.wall_side = None
+                self.gravity_enabled = True
+                self.change_state(PetState.FALLING)
+        
         elif self.state in [PetState.POSE, PetState.EAT_BERRY, PetState.THROW_NEEDLE, PetState.WATCH]:
+            # Special actions - wait for animation to complete
             animation_completed = True
             if self.animation_manager:
                 try:
@@ -607,32 +584,70 @@ class DesktopPet:
                 if self.state != PetState.WATCH:
                     self.stats.special_actions_performed += 1
         
-        elif self.state == PetState.FALLING or self.state == PetState.THROWN:
+        elif self.state in [PetState.FALLING, PetState.THROWN]:
+            # While falling/thrown, ensure gravity is active
             self.gravity_enabled = True
         
         elif self.state == PetState.BOUNCING:
+            # Bounce state is brief
             if self.on_ground and abs(self.velocity_y) < self.MIN_BOUNCE_VELOCITY:
                 self.change_state(PetState.IDLE)
             self.gravity_enabled = True
 
         elif self.state == PetState.DRAGGING:
+            # While dragging, disable gravity and wall climbing
             self.gravity_enabled = False
+            self.on_wall = False
+            self.wall_side = None
+    
+    def _update_behavioral_ai(self, dt: float) -> None:
+        """Enhanced AI dengan wall climbing consideration"""
+        # Only make decisions when idle and on ground (or on wall)
+        if self.state != PetState.IDLE or (not self.on_ground and not self.on_wall):
+            return
+        
+        # Random behavior selection
+        if self.behavior_timer > 2.0:
+            self.behavior_timer = 0.0
+            
+            # Calculate behavior probabilities
+            energy_factor = self.stats.energy / 100.0
+            happiness_factor = self.stats.happiness / 100.0
+            activity_chance = (energy_factor + happiness_factor) / 2.0
+            
+            # Special wall climbing behavior
+            if self.on_wall and random.random() < 0.3:
+                # Continue climbing or fall off
+                if random.random() < 0.7:
+                    self.change_state(PetState.CLIMB_WALL)
+                else:
+                    self.on_wall = False
+                    self.wall_side = None
+                    self.gravity_enabled = True
+                    self.change_state(PetState.FALLING)
+                return
+            
+            if random.random() < activity_chance * 0.3:
+                self._decide_next_action()
     
     def _decide_next_action(self) -> None:
-        """Decide next action berdasarkan AI (legacy method, now uses random behavior AI)"""
+        """Enhanced action decision dengan wall climbing options"""
         possible_actions = []
         
+        # Basic movement actions
         if self.stats.energy > 30:
             possible_actions.extend([
                 (PetState.WALKING, 40),
                 (PetState.RUNNING, 20),
             ])
         
+        # Rest actions
         if self.stats.energy < 70:
             possible_actions.extend([
                 (PetState.SITTING, 30),
             ])
         
+        # Special actions
         if self.stats.happiness > 50:
             possible_actions.extend([
                 (PetState.POSE, 15),
@@ -640,12 +655,25 @@ class DesktopPet:
                 (PetState.WATCH, 20),
             ])
         
+        # Wall climbing actions (if near boundary walls)
+        if self.boundary_manager and self.config.get('boundaries.wall_climbing_enabled', True):
+            boundaries = self.boundary_manager.boundaries
+            near_left_wall = abs(self.x - boundaries['left_wall_x']) < 50
+            near_right_wall = abs(self.x - boundaries['right_wall_x']) < 50
+            
+            if near_left_wall or near_right_wall:
+                possible_actions.extend([
+                    (PetState.GRAB_WALL, 25),  # Higher chance near walls
+                ])
+        
+        # Random special actions
         if random.random() < 0.1:
             possible_actions.extend([
                 (PetState.THROW_NEEDLE, 5),
             ])
         
         if possible_actions:
+            # Weighted random selection
             total_weight = sum(weight for _, weight in possible_actions)
             random_value = random.randint(1, total_weight)
             
@@ -655,23 +683,35 @@ class DesktopPet:
                 if random_value <= current_weight:
                     if action in [PetState.WALKING, PetState.RUNNING]:
                         self._start_movement(action)
+                    elif action == PetState.GRAB_WALL:
+                        self._start_wall_climbing()
                     else:
                         self.change_state(action)
                     break
     
     def _start_movement(self, movement_type: PetState) -> None:
-        """Start movement dengan target random (multi-monitor aware)"""
-        max_distance = 300 if movement_type == PetState.RUNNING else 150
-        direction = random.choice([-1, 1])
-        distance = random.randint(50, max_distance)
+        """Start movement dengan target random"""
+        if self.boundary_manager:
+            # Use boundary-aware movement
+            playable = self.boundary_manager.get_playable_area()
+            max_distance = 300 if movement_type == PetState.RUNNING else 150
+            direction = random.choice([-1, 1])
+            distance = random.randint(50, max_distance)
+            
+            self.target_x = self.x + (distance * direction)
+            # Clamp to playable area
+            self.target_x = max(playable['left'], min(playable['right'] - self.rect.width, self.target_x))
+        else:
+            # Fallback movement
+            max_distance = 300 if movement_type == PetState.RUNNING else 150
+            direction = random.choice([-1, 1])
+            distance = random.randint(50, max_distance)
+            self.target_x = self.x + (distance * direction)
+            self.target_x = max(0.0, min(1920.0, self.target_x))
         
-        # Calculate target within current monitor bounds
-        monitor = self.current_monitor or {'left': 0, 'right': 1920}
-        self.target_x = self.x + (distance * direction)
-        self.target_x = max(monitor['left'], min(monitor['right'] - self.rect.width, self.target_x))
+        self.facing_right = self.target_x > self.x
         
-        self.facing_right = direction > 0
-        
+        # Update animation facing direction
         if self.animation_manager:
             try:
                 self.animation_manager.set_facing_direction(self.facing_right)
@@ -679,6 +719,38 @@ class DesktopPet:
                 pass
         
         self.change_state(movement_type)
+    
+    def _start_wall_climbing(self) -> None:
+        """Start wall climbing behavior"""
+        if not self.boundary_manager:
+            return
+        
+        boundaries = self.boundary_manager.boundaries
+        
+        # Determine which wall to climb
+        left_distance = abs(self.x - boundaries['left_wall_x'])
+        right_distance = abs(self.x - boundaries['right_wall_x'])
+        
+        if left_distance < right_distance:
+            # Move to left wall
+            self.target_x = boundaries['left_wall_x']
+            self.wall_side = 'left'
+            self.facing_right = False
+        else:
+            # Move to right wall
+            self.target_x = boundaries['right_wall_x'] - self.rect.width
+            self.wall_side = 'right'
+            self.facing_right = True
+        
+        # Update animation facing direction
+        if self.animation_manager:
+            try:
+                self.animation_manager.set_facing_direction(self.facing_right)
+            except:
+                pass
+        
+        # Start walking to wall
+        self.change_state(PetState.WALKING)
     
     def _change_direction(self) -> None:
         """Change facing direction"""
@@ -691,18 +763,25 @@ class DesktopPet:
     
     def _update_stats(self, dt: float) -> None:
         """Enhanced stats management"""
+        # Gradually decrease happiness and energy over time
         self.stats.happiness = max(0, self.stats.happiness - 0.5 * dt)
         self.stats.energy = max(0, self.stats.energy - 0.3 * dt)
         
-        if self.state in [PetState.SITTING, PetState.IDLE]:
+        # Restore energy when sitting, idle, or wall climbing
+        if self.state in [PetState.SITTING, PetState.IDLE, PetState.GRAB_WALL]:
             self.stats.energy = min(100, self.stats.energy + 0.5 * dt)
         
+        # Wall climbing uses energy
+        if self.state == PetState.CLIMB_WALL:
+            self.stats.energy = max(0, self.stats.energy - 1.0 * dt)
+        
+        # Restore happiness with interactions
         time_since_interaction = time.time() - self.stats.last_interaction
         if time_since_interaction < 10:
             self.stats.happiness = min(100, self.stats.happiness + 1 * dt)
     
     def change_state(self, new_state: PetState) -> None:
-        """Enhanced state changing dengan animation integration"""
+        """Enhanced state changing dengan wall climbing integration"""
         if new_state != self.state:
             self.previous_state = self.state
             self.state = new_state
@@ -716,7 +795,7 @@ class DesktopPet:
                     loop_animation = new_state in [PetState.IDLE, PetState.WALKING, 
                                                  PetState.RUNNING, PetState.SITTING,
                                                  PetState.GRAB_WALL, PetState.GRAB_CEILING,
-                                                 PetState.BOUNCING]
+                                                 PetState.CLIMB_WALL, PetState.BOUNCING]
                     self.animation_manager.play_action(new_state.value, loop=loop_animation)
                 except Exception as e:
                     print(f"Error starting animation for {new_state.value}: {e}")
@@ -727,27 +806,37 @@ class DesktopPet:
                 self.velocity_y = 0
                 self.gravity_enabled = False
                 self.on_ground = True
-            elif new_state == PetState.FALLING or new_state == PetState.THROWN:
+                self.on_wall = False
+            elif new_state in [PetState.FALLING, PetState.THROWN]:
                 self.on_ground = False
+                self.on_wall = False
                 self.gravity_enabled = True
             elif new_state == PetState.DRAGGING:
                 self.velocity_x = 0
                 self.velocity_y = 0
                 self.gravity_enabled = False
                 self.on_ground = False
-                self.pinch_animation_active = True  # Enable pinch animation
+                self.on_wall = False
             elif new_state == PetState.BOUNCING:
                 self.on_ground = False
+                self.on_wall = False
                 self.gravity_enabled = True
             elif new_state == PetState.IDLE:
                 self.velocity_x = 0
                 self.velocity_y = 0
-                self.on_ground = True
-                self.gravity_enabled = True
-                self.pinch_animation_active = False  # Disable pinch animation
+                if not self.on_wall:
+                    self.on_ground = True
+                    self.gravity_enabled = True
+            elif new_state in [PetState.GRAB_WALL, PetState.CLIMB_WALL]:
+                self.on_wall = True
+                self.on_ground = False
+                self.gravity_enabled = False
+                self.velocity_x = 0
+                if new_state == PetState.CLIMB_WALL:
+                    self.velocity_y = 0  # Start climbing from stationary
     
     def handle_mouse_down(self, pos: Tuple[int, int], button: int) -> str:
-        """Enhanced mouse handling dengan pinch animation debug"""
+        """Enhanced mouse handling"""
         if not self.rect.collidepoint(pos):
             return "none"
         
@@ -757,10 +846,6 @@ class DesktopPet:
             self.dragging = True
             self.drag_offset_x = pos[0] - self.rect.x
             self.drag_offset_y = pos[1] - self.rect.y
-            
-            # Calculate relative mouse position for pinch animation
-            self.mouse_relative_x = pos[0] - self.rect.centerx
-            
             self.change_state(PetState.DRAGGING)
             
             # Update interaction stats
@@ -769,18 +854,24 @@ class DesktopPet:
             self.stats.times_petted += 1
             self.stats.happiness = min(100, self.stats.happiness + 10)
             
-            print(f"🤏 Started pinch drag: {self.pet_id} (offset: {self.mouse_relative_x:.0f})")
             return "drag_start"
         
         elif button == 3:  # Right click
+            # Double right-click detection
             if current_time - self.last_click_time < AppConstants.DOUBLE_CLICK_TIMEOUT:
+                self.stop()  # Mark pet as not running
                 return "kill"
             else:
                 self.last_click_time = current_time
+                # Single right-click actions
                 if self.state != PetState.SITTING:
                     self.change_state(PetState.SITTING)
                 else:
+                    # Cycle through special actions
                     special_actions = [PetState.POSE, PetState.EAT_BERRY, PetState.WATCH, PetState.THROW_NEEDLE]
+                    if self.boundary_manager and self.config.get('boundaries.wall_climbing_enabled', True):
+                        special_actions.append(PetState.GRAB_WALL)
+                    
                     chosen_action = random.choice(special_actions)
                     self.change_state(chosen_action)
                 return "sit"
@@ -788,10 +879,9 @@ class DesktopPet:
         return "none"
     
     def handle_mouse_up(self, button: int, mouse_dx: float = 0.0, mouse_dy: float = 0.0) -> str:
-        """Enhanced mouse up handling dengan throw physics"""
+        """Enhanced mouse up handling with throw physics"""
         if button == 1 and self.dragging:
             self.dragging = False
-            self.pinch_animation_active = False  # Disable pinch animation
             
             # Apply throw velocity
             self.velocity_x = mouse_dx * self.DRAG_THROW_MULTIPLIER
@@ -799,36 +889,28 @@ class DesktopPet:
             
             self.change_state(PetState.THROWN)
             self.on_ground = False
+            self.on_wall = False
             self.gravity_enabled = True
             
-            print(f"🚀 Pet {self.pet_id} thrown with velocity ({self.velocity_x:.1f}, {self.velocity_y:.1f})")
             return "drag_end"
         
         return "none"
     
     def handle_mouse_motion(self, pos: Tuple[int, int]) -> None:
-        """Enhanced mouse motion handling dengan smooth pinch animation update"""
+        """Enhanced mouse motion handling"""
         if self.dragging:
             self.x = float(pos[0] - self.drag_offset_x) 
             self.y = float(pos[1] - self.drag_offset_y)
             
-            # Update mouse relative position for smooth pinch animation
-            old_relative_x = self.mouse_relative_x
-            self.mouse_relative_x = pos[0] - (self.x + self.rect.width // 2)
-            
-            # Debug pinch changes jika signifikan
-            if abs(self.mouse_relative_x - old_relative_x) > 5:
-                print(f"🤏 Pinch offset updated: {self.mouse_relative_x:.0f}")
-            
             self.target_x = self.x
             self.target_y = self.y
-            
-            # Update current monitor
-            self.current_monitor = self._get_current_monitor()
     
     def handle_speech(self, text: str, duration: float = 10.0) -> None:
-        """Handle speech bubble display"""
+        """Handle speech bubble display (enhanced for Phase 2)"""
         print(f"Pet {self.pet_id} says: {text}")
+        # TODO: Implement speech bubble system dalam Phase 2
+        
+        # Update happiness when receiving speech
         self.stats.happiness = min(100, self.stats.happiness + 5)
         self.stats.last_interaction = time.time()
     
@@ -844,7 +926,7 @@ class DesktopPet:
         return False
     
     def get_state_info(self) -> Dict[str, Any]:
-        """Enhanced state information with pinch and behavior info"""
+        """Enhanced state information dengan boundary info"""
         animation_info = {}
         if self.animation_manager:
             try:
@@ -863,11 +945,10 @@ class DesktopPet:
             'state_timer': self.state_timer,
             'facing_right': self.facing_right,
             'on_ground': self.on_ground,
+            'on_wall': self.on_wall,
+            'wall_side': self.wall_side,
             'dragging': self.dragging,
-            'pinch_animation_active': self.pinch_animation_active,
-            'mouse_relative_x': self.mouse_relative_x,
-            'current_monitor': self.current_monitor,
-            'next_behavior_time': self.next_behavior_time - self.behavior_timer,
+            'boundary_manager_connected': self.boundary_manager is not None,
             'stats': {
                 'health': self.stats.health,
                 'happiness': self.stats.happiness,
@@ -876,6 +957,8 @@ class DesktopPet:
                 'walks_taken': self.stats.walks_taken,
                 'times_petted': self.stats.times_petted,
                 'special_actions': self.stats.special_actions_performed,
+                'wall_climbs': self.stats.wall_climbs,
+                'corner_bounces': self.stats.corner_bounces,
                 'time_in_state': self.stats.time_in_current_state
             },
             'animation': animation_info,
@@ -883,7 +966,7 @@ class DesktopPet:
         }
     
     def save_state(self) -> Dict[str, Any]:
-        """Enhanced state persistence"""
+        """Enhanced state persistence dengan boundary info"""
         return {
             'pet_id': self.pet_id,
             'sprite_name': self.sprite_name,
@@ -896,7 +979,10 @@ class DesktopPet:
             'velocity_x': self.velocity_x,
             'velocity_y': self.velocity_y,
             'on_ground': self.on_ground,
+            'on_wall': self.on_wall,
+            'wall_side': self.wall_side,
             'gravity_enabled': self.gravity_enabled,
+            'running': self.running,
             'stats': {
                 'health': self.stats.health,
                 'happiness': self.stats.happiness,
@@ -904,13 +990,15 @@ class DesktopPet:
                 'total_interactions': self.stats.total_interactions,
                 'walks_taken': self.stats.walks_taken,
                 'times_petted': self.stats.times_petted,
-                'special_actions_performed': self.stats.special_actions_performed
+                'special_actions_performed': self.stats.special_actions_performed,
+                'wall_climbs': self.stats.wall_climbs,
+                'corner_bounces': self.stats.corner_bounces
             }
         }
     
     @classmethod
     def load_from_state(cls, state_data: Dict[str, Any]) -> 'DesktopPet':
-        """Load pet dari saved state dengan enhancement"""
+        """Load pet dari saved state dengan boundary support"""
         pet = cls(
             sprite_name=state_data['sprite_name'],
             x=int(state_data['x']),
@@ -925,6 +1013,8 @@ class DesktopPet:
         pet.velocity_x = state_data.get('velocity_x', 0.0)
         pet.velocity_y = state_data.get('velocity_y', 0.0)
         pet.on_ground = state_data.get('on_ground', True)
+        pet.on_wall = state_data.get('on_wall', False)
+        pet.wall_side = state_data.get('wall_side', None)
         pet.gravity_enabled = state_data.get('gravity_enabled', True)
         
         # Restore state
@@ -932,6 +1022,9 @@ class DesktopPet:
             pet.change_state(PetState(state_data['state']))
         except ValueError:
             pet.change_state(PetState.IDLE)
+        
+        # Restore running status
+        pet.running = state_data.get('running', True)
         
         # Restore stats
         stats_data = state_data.get('stats', {})
@@ -942,6 +1035,8 @@ class DesktopPet:
         pet.stats.walks_taken = stats_data.get('walks_taken', 0)
         pet.stats.times_petted = stats_data.get('times_petted', 0)
         pet.stats.special_actions_performed = stats_data.get('special_actions_performed', 0)
+        pet.stats.wall_climbs = stats_data.get('wall_climbs', 0)
+        pet.stats.corner_bounces = stats_data.get('corner_bounces', 0)
         
         # Update animation facing direction
         if pet.animation_manager:
@@ -953,7 +1048,7 @@ class DesktopPet:
         return pet
     
     def draw(self, screen: pygame.Surface) -> None:
-        """Enhanced drawing dengan better sprite handling"""
+        """Enhanced drawing dengan boundary-aware debug info"""
         if self.image:
             screen.blit(self.image, self.rect)
         else:
@@ -964,12 +1059,12 @@ class DesktopPet:
         if self.config.get('settings.debug_mode', False):
             self._draw_debug_info(screen)
         
-        # Stats overlay (only in debug mode)
-        if self.config.get('settings.debug_mode', False) and self.config.get('settings.show_stats', False):
+        # Stats overlay (optional)
+        if self.config.get('settings.show_stats', False):
             self._draw_stats_overlay(screen)
     
     def _draw_debug_info(self, screen: pygame.Surface) -> None:
-        """Enhanced debug information dengan pinch dan behavior info"""
+        """Enhanced debug information dengan boundary info"""
         # Draw bounding box
         pygame.draw.rect(screen, (255, 0, 0), self.rect, 1)
         
@@ -992,15 +1087,11 @@ class DesktopPet:
         state_text = font.render(f"{self.state.value}", True, (255, 255, 255))
         screen.blit(state_text, (self.rect.x, self.rect.y - 25))
         
-        # Draw pinch info
-        if self.pinch_animation_active:
-            pinch_text = font.render(f"Pinch: {self.mouse_relative_x:.0f}", True, (255, 255, 0))
-            screen.blit(pinch_text, (self.rect.x, self.rect.y - 45))
-        
-        # Draw behavior timer
-        next_behavior_in = max(0, self.next_behavior_time - self.behavior_timer)
-        behavior_text = font.render(f"Next: {next_behavior_in:.1f}s", True, (0, 255, 255))
-        screen.blit(behavior_text, (self.rect.x, self.rect.y - 65))
+        # Draw wall climbing indicator
+        if self.on_wall:
+            wall_color = (255, 255, 0)  # Yellow for wall climbing
+            wall_indicator = font.render(f"WALL-{self.wall_side.upper()}", True, wall_color)
+            screen.blit(wall_indicator, (self.rect.x, self.rect.y - 50))
         
         # Draw facing direction indicator
         if self.facing_right:
@@ -1018,10 +1109,23 @@ class DesktopPet:
         
         # Display velocity values
         velocity_text = font.render(f"Vel: ({self.velocity_x:.0f}, {self.velocity_y:.0f})", True, (255, 255, 255))
-        screen.blit(velocity_text, (self.rect.x, self.rect.y - 85))
+        screen.blit(velocity_text, (self.rect.x, self.rect.y - 75))
+        
+        # Display boundary status
+        status_indicators = []
+        if self.on_ground:
+            status_indicators.append("GND")
+        if self.on_wall:
+            status_indicators.append(f"WALL-{self.wall_side.upper()}")
+        if self.gravity_enabled:
+            status_indicators.append("GRAV")
+        
+        if status_indicators:
+            status_text = font.render(" | ".join(status_indicators), True, (0, 255, 255))
+            screen.blit(status_text, (self.rect.x, self.rect.y - 100))
 
     def _draw_stats_overlay(self, screen: pygame.Surface) -> None:
-        """Draw stats overlay untuk monitoring"""
+        """Enhanced stats overlay dengan boundary stats"""
         font = pygame.font.Font(None, 16)
         y_offset = 0
         
@@ -1030,12 +1134,9 @@ class DesktopPet:
             f"Happy: {self.stats.happiness:.0f}",
             f"Energy: {self.stats.energy:.0f}",
             f"State: {self.state.value}",
-            f"Monitor: {len(self.monitors)}",
+            f"Climbs: {self.stats.wall_climbs}",
+            f"Bounces: {self.stats.corner_bounces}",
         ]
-        
-        # Add pinch info if active
-        if self.pinch_animation_active:
-            stats_info.append(f"Pinch: {self.mouse_relative_x:.0f}")
         
         for stat_text in stats_info:
             text_surface = font.render(stat_text, True, (255, 255, 255))
@@ -1055,7 +1156,7 @@ class DesktopPet:
                 return self.animation_manager.get_available_actions()
             except:
                 pass
-        return ["Stand", "Walk", "Sit", "Run"]
+        return ["Stand", "Walk", "Sit", "Run", "GrabWall", "ClimbWall"]  # Enhanced fallback actions
     
     def get_performance_info(self) -> Dict[str, Any]:
         """Get performance information untuk debugging"""
@@ -1070,17 +1171,29 @@ class DesktopPet:
             'pet_id': self.pet_id,
             'sprite_name': self.sprite_name,
             'animation_system_loaded': self.animation_manager is not None,
-            'pinch_animation_available': len(self.pinch_sprites) > 0,
-            'behavior_weights_loaded': len(self.behavior_weights),
-            'multi_monitor_support': len(self.monitors) > 0,
+            'boundary_system_connected': self.boundary_manager is not None,
             'current_animation': animation_info,
+            'wall_climbing_stats': {
+                'on_wall': self.on_wall,
+                'wall_side': self.wall_side,
+                'total_climbs': self.stats.wall_climbs,
+                'corner_bounces': self.stats.corner_bounces
+            },
             'update_frequency': '30 FPS target',
             'memory_footprint': 'Light (sprites cached)'
         }
     
+    def stop(self) -> None:
+        """Stop the pet (mark as not running)"""
+        self.running = False
+        print(f"Pet {self.pet_id} stopped")
+    
     def cleanup(self) -> None:
         """Enhanced cleanup"""
         print(f"Cleaning up enhanced pet: {self.pet_id}")
+        
+        # Mark as not running
+        self.running = False
         
         # Stop any running animations
         if self.animation_manager:
@@ -1089,9 +1202,9 @@ class DesktopPet:
             except:
                 pass
         
+        # Clear boundary manager reference
+        self.boundary_manager = None
+        
         # Clear references
         self.animation_manager = None
         self.current_sprite = None
-        self.monitors.clear()
-        self.behavior_weights.clear()
-        self.pinch_sprites.clear()

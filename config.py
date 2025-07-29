@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-config.py - Configuration management and constants
+config.py - Enhanced with boundary settings
 
-Handles JSON configuration management and application constants
-following best practices for settings persistence.
+Added boundary configuration for walls and ground with percentage-based positioning.
 """
 
 import json
@@ -36,14 +35,23 @@ class ConfigManager:
                 "auto_save": True,
                 "spawn_x": None,  # None = auto-center
                 "spawn_y": None,   # None = auto-bottom
-                "debug_mode": False, # Add debug_mode default
-                "show_stats": False, # Add show_stats default
-                # New physics settings
+                "debug_mode": False,
+                "show_stats": False,
+                # Physics settings
                 "physics_gravity_acceleration": 980,  # pixels/second^2
                 "physics_air_resistance_factor": 0.001, # Factor to reduce velocity
-                "physics_bounce_coefficient": 0.6,    # % of velocity retained on bounce (0.0-1.0)
+                "physics_bounce_coefficient": 0.2,    # % of velocity retained on bounce (0.0-1.0)
                 "physics_min_bounce_velocity": 100,    # Min vertical velocity for bounce to occur
-                "physics_drag_throw_multiplier": 2.0, # Multiplier for mouse drag velocity when throwing
+                "physics_drag_throw_multiplier": 6.0, # Multiplier for mouse drag velocity when throwing
+            },
+            # NEW: Boundary settings with percentage-based positioning
+            "boundaries": {
+                "left_wall_percent": 5,      # 5% from left edge
+                "right_wall_percent": 95,    # 95% from left edge (5% from right)
+                "ground_percent": 90,        # 90% from top (10% from bottom)
+                "ceiling_percent": 5,        # 5% from top (for future use)
+                "wall_climbing_enabled": True,  # Enable wall climbing physics
+                "corner_bounce_enabled": True,  # Enable corner bouncing
             },
             "tiktok": {
                 "enabled": False,
@@ -61,7 +69,7 @@ class ConfigManager:
                 "control_panel_y": 100,
                 "selected_sprite": ""
             },
-            "active_pets": [] # Added active_pets to default config
+            "active_pets": []
         }
     
     def load_config(self) -> Dict[str, Any]:
@@ -145,7 +153,7 @@ class ConfigManager:
         """Validate configuration structure and values"""
         try:
             # Check required sections exist
-            required_sections = ['settings', 'tiktok', 'sprite_packs', 'logging', 'ui', 'active_pets']
+            required_sections = ['settings', 'boundaries', 'tiktok', 'sprite_packs', 'logging', 'ui', 'active_pets']
             for section in required_sections:
                 if section not in self.config:
                     print(f"Missing config section: {section}")
@@ -162,29 +170,61 @@ class ConfigManager:
                 print(f"Invalid behavior frequency: {freq}")
                 return False
 
+            # Validate physics settings
             gravity = self.get('settings.physics_gravity_acceleration')
-            if not (0 <= gravity <= 5000): # Reasonable range
+            if not (0 <= gravity <= 5000):
                 print(f"Invalid gravity value: {gravity}")
                 return False
 
             air_resistance = self.get('settings.physics_air_resistance_factor')
-            if not (0.0 <= air_resistance <= 0.1): # Reasonable range
+            if not (0.0 <= air_resistance <= 0.1):
                 print(f"Invalid air resistance value: {air_resistance}")
                 return False
 
             bounce_coeff = self.get('settings.physics_bounce_coefficient')
-            if not (0.0 <= bounce_coeff <= 1.0): # Must be between 0 and 1
+            if not (0.0 <= bounce_coeff <= 1.0):
                 print(f"Invalid bounce coefficient value: {bounce_coeff}")
                 return False
 
             min_bounce_vel = self.get('settings.physics_min_bounce_velocity')
-            if not (0 <= min_bounce_vel <= 1000): # Reasonable range
+            if not (0 <= min_bounce_vel <= 1000):
                 print(f"Invalid min bounce velocity value: {min_bounce_vel}")
                 return False
 
             drag_throw_mult = self.get('settings.physics_drag_throw_multiplier')
-            if not (0.0 <= drag_throw_mult <= 10.0): # Reasonable range
+            if not (0.0 <= drag_throw_mult <= 10.0):
                 print(f"Invalid drag throw multiplier value: {drag_throw_mult}")
+                return False
+            
+            # NEW: Validate boundary settings
+            left_wall = self.get('boundaries.left_wall_percent', 5)
+            if not (0 <= left_wall <= 50):  # Max 50% to prevent overlap
+                print(f"Invalid left wall percent: {left_wall}")
+                return False
+            
+            right_wall = self.get('boundaries.right_wall_percent', 95)
+            if not (50 <= right_wall <= 100):  # Min 50% to prevent overlap
+                print(f"Invalid right wall percent: {right_wall}")
+                return False
+            
+            # Ensure left wall < right wall
+            if left_wall >= right_wall:
+                print(f"Left wall ({left_wall}%) must be less than right wall ({right_wall}%)")
+                return False
+            
+            ground = self.get('boundaries.ground_percent', 90)
+            if not (50 <= ground <= 100):  # Ground should be in lower half
+                print(f"Invalid ground percent: {ground}")
+                return False
+            
+            ceiling = self.get('boundaries.ceiling_percent', 5)
+            if not (0 <= ceiling <= 50):  # Ceiling should be in upper half
+                print(f"Invalid ceiling percent: {ceiling}")
+                return False
+            
+            # Ensure ceiling < ground
+            if ceiling >= ground:
+                print(f"Ceiling ({ceiling}%) must be less than ground ({ground}%)")
                 return False
             
             return True
@@ -193,13 +233,22 @@ class ConfigManager:
             print(f"Config validation error: {e}")
             return False
 
+    def get_boundary_pixels(self, screen_width: int, screen_height: int) -> Dict[str, int]:
+        """Convert boundary percentages to pixel coordinates"""
+        return {
+            'left_wall_x': int(screen_width * self.get('boundaries.left_wall_percent', 5) / 100),
+            'right_wall_x': int(screen_width * self.get('boundaries.right_wall_percent', 95) / 100),
+            'ground_y': int(screen_height * self.get('boundaries.ground_percent', 90) / 100),
+            'ceiling_y': int(screen_height * self.get('boundaries.ceiling_percent', 5) / 100),
+        }
+
 
 # Application Constants
 class AppConstants:
     """Application-wide constants and settings"""
     
     # Version information
-    VERSION = "Phase 1 Step 4" # Updated to P1S4
+    VERSION = "Phase 1 Step 4 - Enhanced Boundaries"
     APP_NAME = "Teknisee Shimeji TikTok"
     
     # File paths
@@ -223,8 +272,16 @@ class AppConstants:
     DRAG_THRESHOLD = 5  # pixels
     
     # UI dimensions
-    CONTROL_PANEL_DEFAULT_SIZE = (450, 600)
-    CONTROL_PANEL_MIN_SIZE = (400, 500)
+    CONTROL_PANEL_DEFAULT_SIZE = (450, 700)  # Increased height for boundary settings
+    CONTROL_PANEL_MIN_SIZE = (400, 600)
+    
+    # Debug colors for boundaries
+    DEBUG_COLORS = {
+        'ground': (0, 100, 255),      # Blue
+        'left_wall': (255, 0, 255),   # Purple/Magenta
+        'right_wall': (255, 0, 255),  # Purple/Magenta
+        'ceiling': (255, 255, 0),     # Yellow (for future use)
+    }
     
     # Logging
     LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"

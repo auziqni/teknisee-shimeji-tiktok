@@ -21,8 +21,129 @@ if TYPE_CHECKING:
     from control_panel import ControlPanel
 
 
+class BoundaryManager:
+    """Manages screen boundaries and collision detection"""
+    
+    def __init__(self, screen_width: int, screen_height: int, config_manager):
+        self.screen_width = screen_width
+        self.screen_height = screen_height
+        self.config = config_manager
+        self.boundaries = self._calculate_boundaries()
+    
+    def _calculate_boundaries(self) -> Dict[str, int]:
+        """Calculate boundary positions from config percentages"""
+        return self.config.get_boundary_pixels(self.screen_width, self.screen_height)
+    
+    def update_boundaries(self) -> None:
+        """Recalculate boundaries when config changes"""
+        self.boundaries = self._calculate_boundaries()
+    
+    def get_playable_area(self) -> Dict[str, int]:
+        """Get the playable area dimensions"""
+        return {
+            'left': self.boundaries['left_wall_x'],
+            'right': self.boundaries['right_wall_x'],
+            'top': self.boundaries['ceiling_y'],
+            'bottom': self.boundaries['ground_y'],
+            'width': self.boundaries['right_wall_x'] - self.boundaries['left_wall_x'],
+            'height': self.boundaries['ground_y'] - self.boundaries['ceiling_y']
+        }
+    
+    def check_boundary_collision(self, x: float, y: float, width: int, height: int) -> Dict[str, bool]:
+        """Check if a rectangle collides with any boundaries"""
+        return {
+            'left_wall': x <= self.boundaries['left_wall_x'],
+            'right_wall': x + width >= self.boundaries['right_wall_x'],
+            'ground': y + height >= self.boundaries['ground_y'],
+            'ceiling': y <= self.boundaries['ceiling_y']
+        }
+    
+    def clamp_to_boundaries(self, x: float, y: float, width: int, height: int) -> Tuple[float, float]:
+        """Clamp position to stay within boundaries"""
+        # Clamp X position
+        if x < self.boundaries['left_wall_x']:
+            x = self.boundaries['left_wall_x']
+        elif x + width > self.boundaries['right_wall_x']:
+            x = self.boundaries['right_wall_x'] - width
+        
+        # Clamp Y position
+        if y < self.boundaries['ceiling_y']:
+            y = self.boundaries['ceiling_y']
+        elif y + height > self.boundaries['ground_y']:
+            y = self.boundaries['ground_y'] - height
+        
+        return x, y
+    
+    def draw_boundaries(self, screen: pygame.Surface) -> None:
+        """Draw boundary lines for debug visualization"""
+        # Draw ground (blue line)
+        pygame.draw.line(
+            screen,
+            AppConstants.DEBUG_COLORS['ground'],
+            (0, self.boundaries['ground_y']),
+            (self.screen_width, self.boundaries['ground_y']),
+            3
+        )
+        
+        # Draw left wall (purple line)
+        pygame.draw.line(
+            screen,
+            AppConstants.DEBUG_COLORS['left_wall'],
+            (self.boundaries['left_wall_x'], 0),
+            (self.boundaries['left_wall_x'], self.screen_height),
+            3
+        )
+        
+        # Draw right wall (purple line)
+        pygame.draw.line(
+            screen,
+            AppConstants.DEBUG_COLORS['right_wall'],
+            (self.boundaries['right_wall_x'], 0),
+            (self.boundaries['right_wall_x'], self.screen_height),
+            3
+        )
+        
+        # Draw ceiling (yellow line)
+        pygame.draw.line(
+            screen,
+            AppConstants.DEBUG_COLORS['ceiling'],
+            (0, self.boundaries['ceiling_y']),
+            (self.screen_width, self.boundaries['ceiling_y']),
+            3
+        )
+    
+    def _draw_corner_indicators(self, screen: pygame.Surface) -> None:
+        """Draw corner indicators for debugging"""
+        corner_size = 10
+        corner_color = (255, 255, 0)  # Yellow
+        
+        # Top-left corner
+        pygame.draw.rect(screen, corner_color, 
+                        (self.boundaries['left_wall_x'] - corner_size//2, 
+                         self.boundaries['ceiling_y'] - corner_size//2, 
+                         corner_size, corner_size))
+        
+        # Top-right corner
+        pygame.draw.rect(screen, corner_color, 
+                        (self.boundaries['right_wall_x'] - corner_size//2, 
+                         self.boundaries['ceiling_y'] - corner_size//2, 
+                         corner_size, corner_size))
+        
+        # Bottom-left corner
+        pygame.draw.rect(screen, corner_color, 
+                        (self.boundaries['left_wall_x'] - corner_size//2, 
+                         self.boundaries['ground_y'] - corner_size//2, 
+                         corner_size, corner_size))
+        
+        # Bottom-right corner
+        pygame.draw.rect(screen, corner_color, 
+                        (self.boundaries['right_wall_x'] - corner_size//2, 
+                         self.boundaries['ground_y'] - corner_size//2, 
+                         corner_size, corner_size))
+
+
 class PygameWindow:
-    """Hybrid transparent window menggunakan Tkinter + Pygame"""
+    """Hybrid transparent window menggunakan Tkinter + Pygame dengan boundary system"""
     
     def __init__(self):
         # Initialize Pygame (embedded mode)
@@ -39,8 +160,9 @@ class PygameWindow:
         # Embed pygame dalam tkinter
         self._setup_pygame_in_tkinter()
         
-        # Multi-monitor detection (simple)
-        self.monitors = self._detect_monitors_simple()
+        # Configuration and boundary system
+        self.config = get_config()
+        self.boundary_manager = BoundaryManager(self.screen_width, self.screen_height, self.config)
         
         # Game state
         self.pets: List['DesktopPet'] = []
@@ -59,9 +181,10 @@ class PygameWindow:
         self.mouse_dx: float = 0.0
         self.mouse_dy: float = 0.0
         
-        # Configuration
-        self.config = get_config()
+        # Sprite loader
         self.sprite_loader = get_sprite_loader()
+        
+        # Reference to control panel
         self.control_panel: Optional['ControlPanel'] = None
         
         # Game loop control
@@ -70,6 +193,7 @@ class PygameWindow:
         
         print(f"🎮 Hybrid transparent window created: {self.screen_width}x{self.screen_height}")
         print("✅ Using Tkinter transparency + Pygame rendering")
+        print(f"🎯 Boundary system initialized")
     
     def _create_transparent_tkinter_window(self) -> tk.Tk:
         """Create fully transparent Tkinter window"""
@@ -127,17 +251,6 @@ class PygameWindow:
             self.screen = pygame.display.set_mode((800, 600))
             self.screen.fill((50, 50, 50))
     
-    def _detect_monitors_simple(self) -> List[Dict[str, int]]:
-        """Simple monitor detection"""
-        return [{
-            'left': 0, 
-            'top': 0, 
-            'right': self.screen_width, 
-            'bottom': self.screen_height,
-            'width': self.screen_width, 
-            'height': self.screen_height
-        }]
-    
     def set_control_panel(self, panel: 'ControlPanel') -> None:
         """Connect control panel"""
         self.control_panel = panel
@@ -145,7 +258,16 @@ class PygameWindow:
 
     def _on_settings_changed(self, setting_name: str, value: Any) -> None:
         """Handle settings changes"""
-        self.config.set(f'settings.{setting_name}', value)
+        # Update the config manager first
+        self.config.set(f'settings.{setting_name}' if not setting_name.endswith('_percent') and not setting_name.endswith('_enabled') else f'boundaries.{setting_name}', value) 
+        print(f"Setting changed: {setting_name} = {value}")
+
+        # Handle boundary-specific changes
+        if setting_name in ['left_wall_percent', 'right_wall_percent', 'ground_percent', 'wall_climbing_enabled', 'corner_bounce_enabled']:
+            self.boundary_manager.update_boundaries()
+            print(f"Boundaries updated: {self.boundary_manager.boundaries}")
+
+        # Propagate physics changes to all active pets
         if setting_name.startswith('physics_'):
             for pet in self.pets:
                 pet.update_physics_parameters()
@@ -157,10 +279,10 @@ class PygameWindow:
         if x is None:
             x = self.config.get('settings.spawn_x') or (self.screen_width // 2)
         if y is None:
-            y = self.config.get('settings.spawn_y') or (self.screen_height - AppConstants.SCREEN_MARGIN)
+            y = self.config.get('settings.spawn_y') or (self.screen_height - AppConstants.SPAWN_OFFSET)
         
         pet = DesktopPet(sprite_name, x, y)
-        pet.set_monitor_bounds(self.monitors)
+        pet.set_boundary_manager(self.boundary_manager)
         self.pets.append(pet)
         
         print(f"🐾 Added pet: {pet.pet_id} at ({x}, {y})")
@@ -266,7 +388,10 @@ class PygameWindow:
         
         # Update all pets
         for pet in self.pets[:]:
-            pet.update(dt, self.monitors)
+            pet.update(dt, (self.screen_width, self.screen_height))
+        
+        # Remove dead pets
+        self.pets = [pet for pet in self.pets if pet.running]
         
         # Update performance
         self._update_performance_counters(dt)
@@ -286,12 +411,17 @@ class PygameWindow:
         # Clear dengan black (transparent di tkinter)
         self.screen.fill((0, 0, 0))  # Black = transparent
         
+        # Draw boundaries if debug mode is enabled
+        if self.config.get('settings.debug_mode', False):
+            self.boundary_manager.draw_boundaries(self.screen)
+            self.boundary_manager._draw_corner_indicators(self.screen)
+        
         # Draw all pets
         for pet in self.pets:
             pet.draw(self.screen)
         
         # Draw debug overlay if enabled
-        if self.config.get('settings.debug_mode', False):
+        if self.config.get('settings.show_stats', False):
             self._draw_debug_overlay()
         
         # Update display
@@ -398,7 +528,7 @@ class PygameWindow:
             'fps': self.fps_counter,
             'pet_count': len(self.pets),
             'screen_size': (self.screen_width, self.screen_height),
-            'monitors': len(self.monitors),
+            'boundaries': self.boundary_manager.boundaries,
             'transparency_method': 'Tkinter+Pygame',
             'sprite_cache': cache_info,
             'memory_usage_mb': cache_info['estimated_memory_mb']
@@ -428,7 +558,7 @@ class PygameWindow:
         for pet_data in pets_data:
             try:
                 pet = DesktopPet.load_from_state(pet_data)
-                pet.set_monitor_bounds(self.monitors)
+                pet.set_boundary_manager(self.boundary_manager)
                 self.pets.append(pet)
                 loaded_count += 1
             except Exception as e:
@@ -471,3 +601,7 @@ class PygameWindow:
         """Destructor"""
         if hasattr(self, 'running') and self.running:
             self.cleanup()
+
+
+# Alias for backward compatibility
+TkinterPygameWindow = PygameWindow
