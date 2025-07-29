@@ -3,7 +3,7 @@
 sprite_loader.py - Sprite discovery and loading system
 
 Handles auto-discovery of sprite packs and loading of sprite images
-with validation and error handling.
+with validation and error handling. Fixed circular import issues.
 """
 
 import os
@@ -12,7 +12,6 @@ from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 
 from config import AppConstants, get_config
-from utils.xml_parser import XMLParser
 
 
 @dataclass
@@ -67,9 +66,16 @@ class SpriteDiscovery:
             os.path.join(sprite_path, AppConstants.SPRITE_REQUIRED_FILE)
         )
         
-        # Check for XML files
-        xml_parser = XMLParser()
-        has_xml = xml_parser.validate_sprite_xml(sprite_name)
+        # Check for XML files (without importing xml_parser to avoid circular import)
+        has_xml = False
+        try:
+            xml_dir = os.path.join(sprite_path, AppConstants.XML_CONFIG_DIR)
+            if os.path.exists(xml_dir):
+                actions_xml = os.path.join(xml_dir, AppConstants.ACTIONS_XML)
+                behaviors_xml = os.path.join(xml_dir, AppConstants.BEHAVIORS_XML)
+                has_xml = os.path.exists(actions_xml) and os.path.exists(behaviors_xml)
+        except:
+            has_xml = False
         
         # Count sprite files
         sprite_count = 0
@@ -107,7 +113,6 @@ class SpriteLoader:
     def __init__(self):
         self._sprite_cache: Dict[str, pygame.Surface] = {}
         self._fallback_sprite: Optional[pygame.Surface] = None
-        self.xml_parser = XMLParser()
     
     def load_sprite(self, sprite_name: str, filename: str) -> pygame.Surface:
         """Load a sprite image with caching"""
@@ -122,7 +127,17 @@ class SpriteLoader:
         
         try:
             if os.path.exists(sprite_path):
-                surface = pygame.image.load(sprite_path).convert_alpha()
+                # Load image without convert first (to avoid display init error)
+                surface = pygame.image.load(sprite_path)
+                
+                # Try to convert with alpha if display is initialized
+                try:
+                    if pygame.get_init():
+                        surface = surface.convert_alpha()
+                except pygame.error:
+                    # Display not initialized yet, use as-is
+                    pass
+                
                 self._sprite_cache[cache_key] = surface
                 return surface
             else:
@@ -144,24 +159,47 @@ class SpriteLoader:
     def preload_sprite_pack(self, sprite_name: str) -> bool:
         """Preload all sprites for a sprite pack"""
         try:
-            # Parse XML to get list of required sprites
-            if not self.xml_parser.parse_sprite_pack(sprite_name):
-                print(f"Failed to parse XML for sprite pack: {sprite_name}")
-                return False
-            
-            # Load all sprites referenced in actions
-            loaded_count = 0
-            actions = self.xml_parser.get_all_actions()
-            
-            for action_data in actions.values():
-                for animation in action_data.animations:
-                    for pose in animation.poses:
-                        if pose.image:
-                            self.load_sprite(sprite_name, pose.image)
-                            loaded_count += 1
-            
-            print(f"Preloaded {loaded_count} sprites for pack: {sprite_name}")
-            return True
+            # Parse XML to get list of required sprites (with lazy import)
+            try:
+                from utils.xml_parser import XMLParser
+                xml_parser = XMLParser()
+                if not xml_parser.parse_sprite_pack(sprite_name):
+                    print(f"Failed to parse XML for sprite pack: {sprite_name}")
+                    return False
+                
+                # Load all sprites referenced in actions
+                loaded_count = 0
+                actions = xml_parser.get_all_actions()
+                
+                for action_data in actions.values():
+                    for animation in action_data.animations:
+                        for pose in animation.poses:
+                            if pose.image:
+                                self.load_sprite(sprite_name, pose.image)
+                                loaded_count += 1
+                
+                print(f"Preloaded {loaded_count} sprites for pack: {sprite_name}")
+                return True
+                
+            except ImportError:
+                # Fallback: load common sprite files
+                print(f"XML parser not available, loading common sprites for {sprite_name}")
+                common_sprites = [
+                    "shime1.png", "shime1a.png",  # Idle
+                    "shime2.png", "shime3.png",   # Walk
+                    "shime11.png", "shime11a.png" # Sit
+                ]
+                
+                loaded_count = 0
+                for sprite_file in common_sprites:
+                    try:
+                        self.load_sprite(sprite_name, sprite_file)
+                        loaded_count += 1
+                    except:
+                        pass
+                
+                print(f"Preloaded {loaded_count} common sprites for pack: {sprite_name}")
+                return loaded_count > 0
             
         except Exception as e:
             print(f"Error preloading sprite pack {sprite_name}: {e}")
@@ -212,20 +250,45 @@ class SpriteLoader:
     
     def validate_sprite_references(self, sprite_name: str) -> Dict[str, bool]:
         """Validate that all XML-referenced sprites exist"""
-        if not self.xml_parser.parse_sprite_pack(sprite_name):
+        try:
+            # Lazy import to avoid circular dependency
+            from utils.xml_parser import XMLParser
+            xml_parser = XMLParser()
+            
+            if not xml_parser.parse_sprite_pack(sprite_name):
+                return {}
+            
+            validation_results = {}
+            actions = xml_parser.get_all_actions()
+            
+            for action_data in actions.values():
+                for animation in action_data.animations:
+                    for pose in animation.poses:
+                        if pose.image:
+                            sprite_path = AppConstants.get_sprite_path(sprite_name, pose.image)
+                            validation_results[pose.image] = os.path.exists(sprite_path)
+            
+            return validation_results
+            
+        except ImportError:
+            # Fallback: check common sprites
+            print("XML parser not available, checking common sprites")
+            common_sprites = [
+                "shime1.png", "shime1a.png",
+                "shime2.png", "shime3.png", 
+                "shime11.png", "shime11a.png"
+            ]
+            
+            validation_results = {}
+            for sprite_file in common_sprites:
+                sprite_path = AppConstants.get_sprite_path(sprite_name, sprite_file)
+                validation_results[sprite_file] = os.path.exists(sprite_path)
+            
+            return validation_results
+        
+        except Exception as e:
+            print(f"Error validating sprite references: {e}")
             return {}
-        
-        validation_results = {}
-        actions = self.xml_parser.get_all_actions()
-        
-        for action_data in actions.values():
-            for animation in action_data.animations:
-                for pose in animation.poses:
-                    if pose.image:
-                        sprite_path = AppConstants.get_sprite_path(sprite_name, pose.image)
-                        validation_results[pose.image] = os.path.exists(sprite_path)
-        
-        return validation_results
 
 
 # Global sprite loader instance
