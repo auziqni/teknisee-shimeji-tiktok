@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-gui_manager.py - Pygame window and rendering management
+gui_manager.py - Hybrid Tkinter+Pygame Transparent Desktop Pet
 
-Handles the main pygame window, rendering loop, event handling,
-and pet management with proper performance optimization.
+Menggunakan Tkinter untuk transparency dan Pygame untuk sprite rendering.
+Solusi ini lebih reliable di sistem yang tidak support pygame alpha.
 """
 
 import pygame
+import tkinter as tk
 import os
 import time
+import threading
 from typing import List, Tuple, Optional, Dict, Any, TYPE_CHECKING
 
 from config import AppConstants, get_config
@@ -16,30 +18,29 @@ from sprite_loader import get_sprite_loader
 
 if TYPE_CHECKING:
     from pet_behavior import DesktopPet
-    from control_panel import ControlPanel # Import ControlPanel for type hinting
+    from control_panel import ControlPanel
 
 
 class PygameWindow:
-    """Main pygame window manager for desktop pets"""
+    """Hybrid transparent window menggunakan Tkinter + Pygame"""
     
     def __init__(self):
-        # Initialize Pygame
+        # Initialize Pygame (embedded mode)
         pygame.init()
         
-        # Get screen dimensions
+        # Get screen info
         self.display_info = pygame.display.Info()
         self.screen_width = self.display_info.current_w
         self.screen_height = self.display_info.current_h
         
-        # Create transparent window
-        self.screen = pygame.display.set_mode(
-            (self.screen_width, self.screen_height),
-            pygame.NOFRAME | pygame.SRCALPHA
-        )
-        pygame.display.set_caption(AppConstants.APP_NAME)
+        # Create Tkinter transparent window
+        self.tk_root = self._create_transparent_tkinter_window()
         
-        # Initialize window properties
-        self._setup_window_properties()
+        # Embed pygame dalam tkinter
+        self._setup_pygame_in_tkinter()
+        
+        # Multi-monitor detection (simple)
+        self.monitors = self._detect_monitors_simple()
         
         # Game state
         self.pets: List['DesktopPet'] = []
@@ -52,7 +53,7 @@ class PygameWindow:
         self.fps_counter = 0.0
         self.last_fps_update = time.time()
 
-        # Mouse tracking for velocity (new)
+        # Mouse tracking
         self.last_mouse_pos: Optional[Tuple[int, int]] = None
         self.current_mouse_pos: Optional[Tuple[int, int]] = None
         self.mouse_dx: float = 0.0
@@ -61,69 +62,112 @@ class PygameWindow:
         # Configuration
         self.config = get_config()
         self.sprite_loader = get_sprite_loader()
+        self.control_panel: Optional['ControlPanel'] = None
         
-        # Reference to control panel for signal connection (will be set after control panel is created)
-        self.control_panel: Optional['ControlPanel'] = None 
-
-        print(f"Pygame window initialized: {self.screen_width}x{self.screen_height}")
+        # Game loop control
+        self.game_thread = None
+        self.game_running = False
+        
+        print(f"🎮 Hybrid transparent window created: {self.screen_width}x{self.screen_height}")
+        print("✅ Using Tkinter transparency + Pygame rendering")
+    
+    def _create_transparent_tkinter_window(self) -> tk.Tk:
+        """Create fully transparent Tkinter window"""
+        root = tk.Tk()
+        
+        # Remove window decorations
+        root.overrideredirect(True)
+        
+        # Set window size and position
+        root.geometry(f"{self.screen_width}x{self.screen_height}+0+0")
+        
+        # Make window transparent
+        root.wm_attributes('-transparentcolor', 'black')  # Black = transparent
+        root.wm_attributes('-topmost', True)  # Always on top
+        
+        # Set transparent background
+        root.configure(bg='black')
+        
+        # Make window click-through for background (except widgets)
+        try:
+            # Windows-specific: allow click-through
+            root.wm_attributes('-transparentcolor', 'black')
+        except:
+            pass
+        
+        print("✅ Tkinter transparent window created")
+        return root
+    
+    def _setup_pygame_in_tkinter(self):
+        """Setup pygame surface dalam tkinter window"""
+        try:
+            # Set pygame to use tkinter window
+            os.environ['SDL_WINDOWID'] = str(self.tk_root.winfo_id())
+            
+            # Wait for tkinter window to be ready
+            self.tk_root.update()
+            
+            # Create pygame display dalam tkinter
+            self.screen = pygame.display.set_mode(
+                (self.screen_width, self.screen_height),
+                pygame.NOFRAME
+            )
+            
+            pygame.display.set_caption("Desktop Pet")
+            
+            # Set black sebagai background (akan jadi transparent)
+            self.screen.fill((0, 0, 0))  # Black = transparent di tkinter
+            pygame.display.flip()
+            
+            print("✅ Pygame embedded dalam Tkinter")
+            
+        except Exception as e:
+            print(f"❌ Error embedding pygame: {e}")
+            # Fallback: create separate pygame window
+            self.screen = pygame.display.set_mode((800, 600))
+            self.screen.fill((50, 50, 50))
+    
+    def _detect_monitors_simple(self) -> List[Dict[str, int]]:
+        """Simple monitor detection"""
+        return [{
+            'left': 0, 
+            'top': 0, 
+            'right': self.screen_width, 
+            'bottom': self.screen_height,
+            'width': self.screen_width, 
+            'height': self.screen_height
+        }]
     
     def set_control_panel(self, panel: 'ControlPanel') -> None:
-        """Set the control panel instance and connect signals."""
+        """Connect control panel"""
         self.control_panel = panel
-        # Connect the settings_changed signal to a handler in PygameWindow
         self.control_panel.settings_changed.connect(self._on_settings_changed)
-        print("Control panel connected to PygameWindow for settings updates.")
 
     def _on_settings_changed(self, setting_name: str, value: Any) -> None:
-        """Handle settings changes from the control panel."""
-        # Update the config manager first
-        self.config.set(f'settings.{setting_name}', value) 
-        print(f"Setting changed: {setting_name} = {value}. Propagating to pets...")
-
-        # Propagate changes to all active pets if it's a physics setting
+        """Handle settings changes"""
+        self.config.set(f'settings.{setting_name}', value)
         if setting_name.startswith('physics_'):
             for pet in self.pets:
-                pet.update_physics_parameters() # Call new method on DesktopPet
-    
-    def _setup_window_properties(self) -> None:
-        """Setup window properties for always-on-top behavior"""
-        if os.name == 'nt':  # Windows
-            try:
-                import win32gui
-                import win32con
-                
-                hwnd = pygame.display.get_wm_info()["window"]
-                win32gui.SetWindowPos(
-                    hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
-                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
-                )
-                print("Window set to always-on-top")
-                
-            except ImportError:
-                print("win32gui not available, window may not stay on top")
-            except Exception as e:
-                print(f"Error setting window properties: {e}")
+                pet.update_physics_parameters()
     
     def add_pet(self, sprite_name: str, x: Optional[int] = None, y: Optional[int] = None) -> str:
-        """Add a new pet to the screen"""
-        # Import here to avoid circular import
+        """Add new pet"""
         from pet_behavior import DesktopPet
         
-        # Use config defaults if position not specified
         if x is None:
             x = self.config.get('settings.spawn_x') or (self.screen_width // 2)
         if y is None:
             y = self.config.get('settings.spawn_y') or (self.screen_height - AppConstants.SCREEN_MARGIN)
         
-        # Create new pet
         pet = DesktopPet(sprite_name, x, y)
+        pet.set_monitor_bounds(self.monitors)
         self.pets.append(pet)
         
-        print(f"Added pet: {pet.pet_id} at ({x}, {y})")
+        print(f"🐾 Added pet: {pet.pet_id} at ({x}, {y})")
         return pet.pet_id
     
     def remove_pet(self, pet: 'DesktopPet') -> bool:
-        """Remove a pet from the screen"""
+        """Remove pet"""
         if pet in self.pets:
             pet.cleanup()
             self.pets.remove(pet)
@@ -132,14 +176,14 @@ class PygameWindow:
         return False
     
     def remove_pet_by_id(self, pet_id: str) -> bool:
-        """Remove a pet by its ID"""
-        for pet in self.pets[:]:  # Copy list to avoid modification during iteration
+        """Remove pet by ID"""
+        for pet in self.pets[:]:
             if pet.pet_id == pet_id:
                 return self.remove_pet(pet)
         return False
     
     def clear_all_pets(self) -> int:
-        """Remove all pets from the screen"""
+        """Remove all pets"""
         count = len(self.pets)
         for pet in self.pets[:]:
             pet.cleanup()
@@ -148,20 +192,23 @@ class PygameWindow:
         return count
     
     def get_pet_by_id(self, pet_id: str) -> Optional['DesktopPet']:
-        """Get pet by its ID"""
+        """Get pet by ID"""
         for pet in self.pets:
             if pet.pet_id == pet_id:
                 return pet
         return None
     
     def handle_events(self) -> None:
-        """Handle pygame events and pet interactions"""
-        # Update current mouse position for velocity calculation
-        self.current_mouse_pos = pygame.mouse.get_pos()
-        if self.last_mouse_pos:
-            self.mouse_dx = self.current_mouse_pos[0] - self.last_mouse_pos[0]
-            self.mouse_dy = self.current_mouse_pos[1] - self.last_mouse_pos[1]
-        self.last_mouse_pos = self.current_mouse_pos
+        """Handle pygame events"""
+        # Track mouse for velocity
+        try:
+            self.current_mouse_pos = pygame.mouse.get_pos()
+            if self.last_mouse_pos:
+                self.mouse_dx = self.current_mouse_pos[0] - self.last_mouse_pos[0]
+                self.mouse_dy = self.current_mouse_pos[1] - self.last_mouse_pos[1]
+            self.last_mouse_pos = self.current_mouse_pos
+        except:
+            pass
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -171,7 +218,6 @@ class PygameWindow:
                 self._handle_mouse_down(event.pos, event.button)
             
             elif event.type == pygame.MOUSEBUTTONUP:
-                # Pass current mouse velocity (dx, dy) to handle_mouse_up
                 self._handle_mouse_up(event.button, self.mouse_dx, self.mouse_dy)
             
             elif event.type == pygame.MOUSEMOTION:
@@ -181,8 +227,7 @@ class PygameWindow:
                 self._handle_key_down(event.key)
     
     def _handle_mouse_down(self, pos: Tuple[int, int], button: int) -> None:
-        """Handle mouse button down events"""
-        # Check pet interactions (reverse order for top-most pet)
+        """Handle mouse down"""
         for pet in reversed(self.pets):
             result = pet.handle_mouse_down(pos, button)
             
@@ -190,29 +235,27 @@ class PygameWindow:
                 self.remove_pet(pet)
                 break
             elif result in ["drag_start", "sit"]:
-                # Pet handled the click, stop processing
                 break
     
     def _handle_mouse_up(self, button: int, mouse_dx: float, mouse_dy: float) -> None:
-        """Handle mouse button up events"""
+        """Handle mouse up"""
         for pet in self.pets:
-            pet.handle_mouse_up(button, mouse_dx, mouse_dy) # Pass mouse dx, dy
+            pet.handle_mouse_up(button, mouse_dx, mouse_dy)
     
     def _handle_mouse_motion(self, pos: Tuple[int, int]) -> None:
-        """Handle mouse motion for dragging"""
+        """Handle mouse motion"""
         for pet in self.pets:
             pet.handle_mouse_motion(pos)
     
     def _handle_key_down(self, key: int) -> None:
-        """Handle keyboard events"""
+        """Handle key press"""
         if key == pygame.K_ESCAPE:
             self.running = False
         elif key == pygame.K_F1:
-            # Toggle debug mode
             debug_mode = self.config.get('settings.debug_mode', False)
             self.config.set('settings.debug_mode', not debug_mode)
+            print(f"Debug mode: {not debug_mode}")
         elif key == pygame.K_F2:
-            # Print performance info
             self._print_performance_info()
     
     def update(self) -> None:
@@ -222,28 +265,26 @@ class PygameWindow:
         self.last_frame_time = current_time
         
         # Update all pets
-        screen_bounds = (self.screen_width, self.screen_height)
-        for pet in self.pets[:]:  # Copy list in case pets are removed during update
-            pet.update(dt, screen_bounds)
+        for pet in self.pets[:]:
+            pet.update(dt, self.monitors)
         
-        # Update performance counters
+        # Update performance
         self._update_performance_counters(dt)
     
     def _update_performance_counters(self, dt: float) -> None:
-        """Update performance tracking"""
+        """Update FPS counter"""
         self.frame_count += 1
         current_time = time.time()
         
-        # Update FPS every second
         if current_time - self.last_fps_update >= 1.0:
             self.fps_counter = self.frame_count / (current_time - self.last_fps_update)
             self.frame_count = 0
             self.last_fps_update = current_time
     
     def draw(self) -> None:
-        """Render everything to screen"""
-        # Clear screen with transparent background
-        self.screen.fill((0, 0, 0, 0))
+        """Draw everything"""
+        # Clear dengan black (transparent di tkinter)
+        self.screen.fill((0, 0, 0))  # Black = transparent
         
         # Draw all pets
         for pet in self.pets:
@@ -257,81 +298,128 @@ class PygameWindow:
         pygame.display.flip()
     
     def _draw_debug_overlay(self) -> None:
-        """Draw debug information overlay"""
+        """Draw debug info"""
         font = pygame.font.Font(None, 24)
         debug_color = (255, 255, 255)
         
-        # FPS counter
-        fps_text = font.render(f"FPS: {self.fps_counter:.1f}", True, debug_color)
-        self.screen.blit(fps_text, (10, 10))
+        debug_info = [
+            f"FPS: {self.fps_counter:.1f}",
+            f"Pets: {len(self.pets)}",
+            f"Method: Tkinter+Pygame",
+            f"Transparency: Active",
+            f"Resolution: {self.screen_width}x{self.screen_height}"
+        ]
         
-        # Pet count
-        pet_count_text = font.render(f"Pets: {len(self.pets)}", True, debug_color)
-        self.screen.blit(pet_count_text, (10, 35))
+        # Draw debug text dengan background
+        for i, info in enumerate(debug_info):
+            # Background rectangle
+            text_surface = font.render(info, True, debug_color)
+            bg_rect = pygame.Rect(10, 10 + i * 25, text_surface.get_width() + 10, 25)
+            pygame.draw.rect(self.screen, (50, 50, 50), bg_rect)
+            
+            # Text
+            self.screen.blit(text_surface, (15, 15 + i * 25))
+    
+    def _game_loop(self):
+        """Game loop dalam thread terpisah"""
+        self.game_running = True
         
-        # Screen resolution
-        res_text = font.render(f"Resolution: {self.screen_width}x{self.screen_height}", True, debug_color)
-        self.screen.blit(res_text, (10, 60))
+        while self.game_running and self.running:
+            try:
+                self.handle_events()
+                self.update()
+                self.draw()
+                self.clock.tick(AppConstants.TARGET_FPS)
+            except Exception as e:
+                print(f"Error in game loop: {e}")
+                break
         
-        # Memory usage (sprite cache)
-        cache_info = self.sprite_loader.get_cache_info()
-        memory_text = font.render(f"Cache: {cache_info['cached_sprites']} sprites, {cache_info['estimated_memory_mb']:.1f}MB", True, debug_color)
-        self.screen.blit(memory_text, (10, 85))
+        print("Game loop stopped")
+    
+    def start_game_loop(self):
+        """Start game loop dalam thread"""
+        if not self.game_thread or not self.game_thread.is_alive():
+            self.game_thread = threading.Thread(target=self._game_loop, daemon=True)
+            self.game_thread.start()
+            print("🎮 Game loop started dalam thread")
     
     def run(self) -> None:
-        """Main game loop (blocking)"""
-        print("Starting main game loop")
+        """Main run method - start both tkinter dan pygame"""
+        print("🎮 Starting hybrid transparent desktop pet window...")
         
-        while self.running:
-            self.handle_events()
-            self.update()
-            self.draw()
-            self.clock.tick(AppConstants.TARGET_FPS)
+        # Start pygame game loop dalam thread
+        self.start_game_loop()
         
-        self.cleanup()
+        # Setup tkinter close handler
+        def on_closing():
+            self.running = False
+            self.game_running = False
+            self.cleanup()
+            self.tk_root.quit()
+        
+        self.tk_root.protocol("WM_DELETE_WINDOW", on_closing)
+        
+        # Run tkinter main loop
+        try:
+            self.tk_root.mainloop()
+        except KeyboardInterrupt:
+            print("Interrupted by user")
+            on_closing()
     
     def step(self) -> bool:
-        """Single frame update (non-blocking)"""
+        """Single frame update untuk integration dengan Qt"""
         if not self.running:
             return False
         
-        self.handle_events()
-        self.update()
-        self.draw()
-        self.clock.tick(AppConstants.TARGET_FPS)
+        # Update tkinter
+        try:
+            self.tk_root.update_idletasks()
+            self.tk_root.update()
+        except:
+            return False
+        
+        # Update pygame jika thread tidak berjalan
+        if not self.game_thread or not self.game_thread.is_alive():
+            try:
+                self.handle_events()
+                self.update()
+                self.draw()
+                self.clock.tick(AppConstants.TARGET_FPS)
+            except:
+                return False
         
         return self.running
     
     def get_performance_info(self) -> Dict[str, Any]:
-        """Get performance information"""
+        """Get performance info"""
         cache_info = self.sprite_loader.get_cache_info()
         
         return {
             'fps': self.fps_counter,
             'pet_count': len(self.pets),
             'screen_size': (self.screen_width, self.screen_height),
+            'monitors': len(self.monitors),
+            'transparency_method': 'Tkinter+Pygame',
             'sprite_cache': cache_info,
             'memory_usage_mb': cache_info['estimated_memory_mb']
         }
     
     def _print_performance_info(self) -> None:
-        """Print performance information to console"""
+        """Print performance info"""
         perf_info = self.get_performance_info()
         print("=== Performance Info ===")
         print(f"FPS: {perf_info['fps']:.1f}")
         print(f"Pets: {perf_info['pet_count']}")
-        print(f"Screen: {perf_info['screen_size'][0]}x{perf_info['screen_size'][1]}")
-        print(f"Sprite Cache: {perf_info['sprite_cache']['cached_sprites']} sprites")
+        print(f"Method: {perf_info['transparency_method']}")
         print(f"Memory: {perf_info['memory_usage_mb']:.1f}MB")
         print("========================")
     
     def save_pets_state(self) -> List[Dict[str, Any]]:
-        """Save state of all pets"""
+        """Save pets state"""
         return [pet.save_state() for pet in self.pets]
     
     def load_pets_state(self, pets_data: List[Dict[str, Any]]) -> int:
-        """Load pets from saved state"""
-        # Import here to avoid circular import
+        """Load pets state"""
         from pet_behavior import DesktopPet
         
         self.clear_all_pets()
@@ -340,6 +428,7 @@ class PygameWindow:
         for pet_data in pets_data:
             try:
                 pet = DesktopPet.load_from_state(pet_data)
+                pet.set_monitor_bounds(self.monitors)
                 self.pets.append(pet)
                 loaded_count += 1
             except Exception as e:
@@ -349,27 +438,36 @@ class PygameWindow:
         return loaded_count
     
     def get_pets_info(self) -> List[Dict[str, Any]]:
-        """Get information about all pets"""
+        """Get pets info"""
         return [pet.get_state_info() for pet in self.pets]
     
     def cleanup(self) -> None:
-        """Cleanup resources"""
-        print("Cleaning up pygame window")
+        """Cleanup"""
+        print("Cleaning up hybrid transparent window")
         
-        # Save pets state to config
+        # Stop game loop
+        self.game_running = False
+        if self.game_thread and self.game_thread.is_alive():
+            self.game_thread.join(timeout=1.0)
+        
+        # Save state
         pets_state = self.save_pets_state()
         self.config.set('active_pets', pets_state)
         
-        # Cleanup all pets
+        # Cleanup pets
         self.clear_all_pets()
-        
-        # Clear sprite cache
         self.sprite_loader.clear_cache()
         
-        # Quit pygame
+        # Cleanup pygame
         pygame.quit()
+        
+        # Cleanup tkinter
+        try:
+            self.tk_root.destroy()
+        except:
+            pass
     
     def __del__(self):
-        """Destructor to ensure cleanup"""
+        """Destructor"""
         if hasattr(self, 'running') and self.running:
             self.cleanup()
