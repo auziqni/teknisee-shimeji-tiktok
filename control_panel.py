@@ -147,9 +147,9 @@ class ControlPanel(QMainWindow):
         info_group = QGroupBox("Controls")
         info_layout = QVBoxLayout(info_group)
         info_text = QLabel(
-            "• Left-click + drag to move pets\n"
+            "• Left-click + drag to move pets (now with throw physics!)\n"
             "• Double right-click to kill individual pet\n"
-            "• Single right-click to make pet sit\n"
+            "• Single right-click to make pet sit / special actions\n"
             "• F1 to toggle debug mode\n"
             "• F2 to print performance info\n"
             "• Settings are auto-saved"
@@ -193,6 +193,67 @@ class ControlPanel(QMainWindow):
         freq_layout.addWidget(self.freq_label)
         general_layout.addLayout(freq_layout)
         
+        # Physics settings
+        physics_group = QGroupBox("Physics Settings")
+        physics_layout = QVBoxLayout(physics_group)
+
+        # Gravity
+        gravity_row_layout = QHBoxLayout()
+        gravity_row_layout.addWidget(QLabel("Gravity (px/s²):"))
+        self.gravity_spin = QSpinBox()
+        self.gravity_spin.setRange(0, 2000)
+        self.gravity_spin.setSingleStep(10)
+        self.gravity_spin.setValue(self.config.get('settings.physics_gravity_acceleration', 980))
+        self.gravity_spin.valueChanged.connect(lambda v: self.settings_changed.emit('physics_gravity_acceleration', v))
+        self.gravity_spin.valueChanged.connect(lambda v: self.gravity_label.setText(f"{v}")) # Update label
+        gravity_row_layout.addWidget(self.gravity_spin)
+        self.gravity_label = QLabel(f"{self.gravity_spin.value()}") # Initial label value
+        gravity_row_layout.addWidget(self.gravity_label)
+        physics_layout.addLayout(gravity_row_layout)
+
+        # Air Resistance
+        air_res_row_layout = QHBoxLayout()
+        air_res_row_layout.addWidget(QLabel("Air Resistance Factor (0.0-0.1):"))
+        self.air_res_slider = QSlider(Qt.Horizontal)
+        self.air_res_slider.setRange(0, 100) # Representing 0.0 to 0.1
+        self.air_res_slider.setValue(int(self.config.get('settings.physics_air_resistance_factor', 0.001) * 1000))
+        self.air_res_slider.valueChanged.connect(lambda v: self.settings_changed.emit('physics_air_resistance_factor', v / 1000.0))
+        self.air_res_slider.valueChanged.connect(lambda v: self.air_res_label.setText(f"{v / 1000.0:.3f}")) # Update label
+        air_res_row_layout.addWidget(self.air_res_slider)
+        self.air_res_label = QLabel(f"{self.air_res_slider.value() / 1000.0:.3f}") # Initial label value
+        air_res_row_layout.addWidget(self.air_res_label)
+        physics_layout.addLayout(air_res_row_layout)
+
+        # Bounce Coefficient
+        bounce_coeff_row_layout = QHBoxLayout()
+        bounce_coeff_row_layout.addWidget(QLabel("Bounce Coefficient (0.0-1.0):"))
+        self.bounce_coeff_slider = QSlider(Qt.Horizontal)
+        self.bounce_coeff_slider.setRange(0, 100) # Representing 0.0 to 1.0
+        # Mengurangi nilai default bounce_coefficient menjadi 0.2 (dari 0.3)
+        self.bounce_coeff_slider.setValue(int(self.config.get('settings.physics_bounce_coefficient', 0.2) * 100))
+        self.bounce_coeff_slider.valueChanged.connect(lambda v: self.settings_changed.emit('physics_bounce_coefficient', v / 100.0))
+        self.bounce_coeff_slider.valueChanged.connect(lambda v: self.bounce_coeff_label.setText(f"{v / 100.0:.2f}")) # Update label
+        bounce_coeff_row_layout.addWidget(self.bounce_coeff_slider)
+        self.bounce_coeff_label = QLabel(f"{self.bounce_coeff_slider.value() / 100.0:.2f}") # Initial label value
+        bounce_coeff_row_layout.addWidget(self.bounce_coeff_label)
+        physics_layout.addLayout(bounce_coeff_row_layout)
+
+        # Throw Multiplier
+        throw_mult_row_layout = QHBoxLayout()
+        throw_mult_row_layout.addWidget(QLabel("Throw Multiplier (0.0-10.0):"))
+        self.throw_mult_slider = QSlider(Qt.Horizontal)
+        self.throw_mult_slider.setRange(0, 100) # Representing 0.0 to 10.0
+        # Meningkatkan nilai default drag_throw_multiplier menjadi 6.0 (dari 4.0)
+        self.throw_mult_slider.setValue(int(self.config.get('settings.physics_drag_throw_multiplier', 6.0) * 10))
+        self.throw_mult_slider.valueChanged.connect(lambda v: self.settings_changed.emit('physics_drag_throw_multiplier', v / 10.0))
+        self.throw_mult_slider.valueChanged.connect(lambda v: self.throw_mult_label.setText(f"{v / 10.0:.1f}")) # Update label
+        throw_mult_row_layout.addWidget(self.throw_mult_slider)
+        self.throw_mult_label = QLabel(f"{self.throw_mult_slider.value() / 10.0:.1f}") # Initial label value
+        throw_mult_row_layout.addWidget(self.throw_mult_label)
+        physics_layout.addLayout(throw_mult_row_layout)
+
+        general_layout.addWidget(physics_group)
+        
         # Checkboxes
         self.boundaries_check = QCheckBox("Keep pets within screen boundaries")
         self.boundaries_check.setChecked(self.config.get('settings.screen_boundaries', True))
@@ -208,6 +269,11 @@ class ControlPanel(QMainWindow):
         self.debug_check.setChecked(self.config.get('settings.debug_mode', False))
         self.debug_check.toggled.connect(self._on_debug_changed)
         general_layout.addWidget(self.debug_check)
+
+        self.show_stats_check = QCheckBox("Show Pet Stats Overlay")
+        self.show_stats_check.setChecked(self.config.get('settings.show_stats', False))
+        self.show_stats_check.toggled.connect(self._on_show_stats_changed)
+        general_layout.addWidget(self.show_stats_check)
         
         layout.addWidget(general_group)
         
@@ -331,8 +397,8 @@ class ControlPanel(QMainWindow):
         status_text = QLabel(
             "✅ Phase 1 Step 1: Core Infrastructure (Complete)\n"
             "✅ Phase 1 Step 2: Control Panel Foundation (Complete)\n"
-            "🔄 Phase 1 Step 3: XML Parser & Animation System (In Progress)\n"
-            "⏳ Phase 1 Step 4: Desktop Boundaries & Physics"
+            "✅ Phase 1 Step 3: XML Parser & Animation System (Complete)\n"
+            "🔄 Phase 1 Step 4: Desktop Boundaries & Physics (In Progress)"
         )
         status_text.setWordWrap(True)
         dev_layout.addWidget(status_text)
@@ -362,8 +428,39 @@ class ControlPanel(QMainWindow):
     def _load_settings(self) -> None:
         """Load settings into UI components"""
         # Settings are loaded in individual widget creation
-        pass
-    
+        # Update sliders and spinboxes with current config values
+        self.volume_slider.setValue(self.config.get('settings.volume', 70))
+        self.freq_slider.setValue(self.config.get('settings.behavior_frequency', 50))
+        
+        # Set values for physics sliders and update their labels
+        gravity_val = self.config.get('settings.physics_gravity_acceleration', 980)
+        self.gravity_spin.setValue(gravity_val)
+        self.gravity_label.setText(f"{gravity_val}")
+
+        air_res_val = self.config.get('settings.physics_air_resistance_factor', 0.001)
+        self.air_res_slider.setValue(int(air_res_val * 1000))
+        self.air_res_label.setText(f"{air_res_val:.3f}")
+
+        bounce_coeff_val = self.config.get('settings.physics_bounce_coefficient', 0.2) # Updated default here
+        self.bounce_coeff_slider.setValue(int(bounce_coeff_val * 100))
+        self.bounce_coeff_label.setText(f"{bounce_coeff_val:.2f}")
+
+        throw_mult_val = self.config.get('settings.physics_drag_throw_multiplier', 6.0) # Updated default here
+        self.throw_mult_slider.setValue(int(throw_mult_val * 10))
+        self.throw_mult_label.setText(f"{throw_mult_val:.1f}")
+
+        self.boundaries_check.setChecked(self.config.get('settings.screen_boundaries', True))
+        self.autosave_check.setChecked(self.config.get('settings.auto_save', True))
+        self.debug_check.setChecked(self.config.get('settings.debug_mode', False))
+        self.show_stats_check.setChecked(self.config.get('settings.show_stats', False))
+
+        self._on_volume_changed(self.volume_slider.value())
+        self._on_frequency_changed(self.freq_slider.value())
+        
+        saved_sprite = self.config.get('ui.selected_sprite')
+        if saved_sprite and saved_sprite in self.sprite_packs:
+            self.sprite_combo.setCurrentText(saved_sprite)
+
     def _on_sprite_changed(self, sprite_name: str) -> None:
         """Handle sprite selection change"""
         self.config.set('ui.selected_sprite', sprite_name)
@@ -395,6 +492,11 @@ class ControlPanel(QMainWindow):
         """Handle debug mode checkbox change"""
         self.config.set('settings.debug_mode', checked)
         self.settings_changed.emit('debug_mode', checked)
+
+    def _on_show_stats_changed(self, checked: bool) -> None:
+        """Handle show stats checkbox change"""
+        self.config.set('settings.show_stats', checked)
+        self.settings_changed.emit('show_stats', checked)
     
     def _spawn_pet(self) -> None:
         """Spawn new pet(s)"""
@@ -443,6 +545,24 @@ class ControlPanel(QMainWindow):
         self.boundaries_check.setChecked(self.config.get('settings.screen_boundaries', True))
         self.autosave_check.setChecked(self.config.get('settings.auto_save', True))
         self.debug_check.setChecked(self.config.get('settings.debug_mode', False))
+        self.show_stats_check.setChecked(self.config.get('settings.show_stats', False))
+
+        # Reload values for physics sliders and update their labels
+        gravity_val = self.config.get('settings.physics_gravity_acceleration', 980)
+        self.gravity_spin.setValue(gravity_val)
+        self.gravity_label.setText(f"{gravity_val}")
+
+        air_res_val = self.config.get('settings.physics_air_resistance_factor', 0.001)
+        self.air_res_slider.setValue(int(air_res_val * 1000))
+        self.air_res_label.setText(f"{air_res_val:.3f}")
+
+        bounce_coeff_val = self.config.get('settings.physics_bounce_coefficient', 0.2) # Updated default here
+        self.bounce_coeff_slider.setValue(int(bounce_coeff_val * 100))
+        self.bounce_coeff_label.setText(f"{bounce_coeff_val:.2f}")
+
+        throw_mult_val = self.config.get('settings.physics_drag_throw_multiplier', 6.0) # Updated default here
+        self.throw_mult_slider.setValue(int(throw_mult_val * 10))
+        self.throw_mult_label.setText(f"{throw_mult_val:.1f}")
         
         # Update labels
         self._on_volume_changed(self.volume_slider.value())
@@ -483,6 +603,7 @@ class ControlPanel(QMainWindow):
             info_text += f"Pet ID: {pet_info['pet_id']}\n"
             info_text += f"  Sprite: {pet_info['sprite_name']}\n"
             info_text += f"  Position: ({pet_info['position'][0]:.0f}, {pet_info['position'][1]:.0f})\n"
+            info_text += f"  Velocity: ({pet_info['velocity'][0]:.0f}, {pet_info['velocity'][1]:.0f})\n" # Added velocity
             info_text += f"  State: {pet_info['state']}\n"
             info_text += f"  Health: {pet_info['stats']['health']:.0f}\n"
             info_text += f"  Happiness: {pet_info['stats']['happiness']:.0f}\n"
@@ -507,6 +628,7 @@ class ControlPanel(QMainWindow):
             self.perf_fps_label.setText(f"FPS: {perf_info['fps']:.1f}")
             self.perf_memory_label.setText(f"Memory: {perf_info['memory_usage_mb']:.1f}MB")
             self.perf_cache_label.setText(f"Sprite Cache: {perf_info['sprite_cache']['cached_sprites']} sprites")
+            self._refresh_pet_info() # Refresh pet info in monitoring tab
     
     def closeEvent(self, event) -> None:
         """Handle window close event"""

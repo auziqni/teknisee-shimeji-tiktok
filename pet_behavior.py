@@ -42,6 +42,8 @@ class PetState(Enum):
     DRAGGING = "Pinched"    # Sesuai dengan action "Pinched" di XML
     FALLING = "Falling"     # Sesuai dengan action "Falling" di XML
     JUMPING = "Jumping"     # Sesuai dengan action "Jumping" di XML
+    THROWN = "Thrown"       # Sesuai dengan action "Thrown" di XML (newly added for clarity)
+    BOUNCING = "Bouncing"   # Sesuai dengan action "Bouncing" di XML (newly added for clarity)
     
     # Wall/ceiling interactions  
     GRAB_WALL = "GrabWall"           # Sesuai dengan action "GrabWall"
@@ -117,7 +119,11 @@ class DesktopPet:
         self.stats = PetStats()
         self.facing_right = True
         self.on_ground = True
-        self.gravity_enabled = True
+        self.gravity_enabled = True # Still used, but values are from config
+
+        # Configuration and Physics parameters from config
+        self.config = get_config()
+        self.update_physics_parameters() # Call this to load initial physics settings
         
         # Behavioral properties
         self.behavior_timer = 0.0
@@ -127,7 +133,7 @@ class DesktopPet:
         # Sprite and rendering - with fallback system
         self.sprite_loader = get_sprite_loader()
         self.current_sprite = None
-        self.current_velocity = (0.0, 0.0)
+        self.current_velocity = (0.0, 0.0) # Velocity from XML animation, not directly used for pet position
         self.current_sprite_name = AppConstants.SPRITE_REQUIRED_FILE
         self.animation_frame = 0
         self.animation_timer = 0.0
@@ -138,13 +144,21 @@ class DesktopPet:
         self.rect.x = x
         self.rect.y = y
         
-        # Configuration
-        self.config = get_config()
+        # Configuration (already done above, removed duplicate)
         
         # Initialize animation
         self._initialize_animation()
         
         print(f"Enhanced pet created: {self.pet_id} at ({x}, {y})")
+
+    def update_physics_parameters(self) -> None:
+        """Updates physics parameters from the global config."""
+        self.GRAVITY_ACCELERATION = self.config.get('settings.physics_gravity_acceleration')
+        self.AIR_RESISTANCE_FACTOR = self.config.get('settings.physics_air_resistance_factor')
+        self.BOUNCE_COEFFICIENT = self.config.get('settings.physics_bounce_coefficient')
+        self.MIN_BOUNCE_VELOCITY = self.config.get('settings.physics_min_bounce_velocity')
+        self.DRAG_THROW_MULTIPLIER = self.config.get('settings.physics_drag_throw_multiplier')
+        print(f"Pet {self.pet_id} physics parameters updated.")
     
     def _load_current_sprite(self) -> pygame.Surface:
         """Load current sprite image dengan error handling"""
@@ -185,9 +199,10 @@ class DesktopPet:
         # Update animation system
         if self.animation_manager:
             try:
+                # anim_velocity is typically 0 for 'Embedded' actions like Falling/Thrown as physics are external
                 self.current_sprite, anim_velocity = self.animation_manager.update(dt)
                 
-                # Use animation velocity if not dragging
+                # Use animation velocity only for specific states like walking/running
                 if not self.dragging and self.state in [PetState.WALKING, PetState.RUNNING]:
                     # Apply animation velocity dengan facing direction
                     vel_x = anim_velocity[0] if self.facing_right else -anim_velocity[0]
@@ -238,6 +253,8 @@ class DesktopPet:
                 frame_sprites = ["shime11.png", "shime11a.png"]
             elif self.state == PetState.RUNNING:
                 frame_sprites = ["shime3e.png", "shime3f.png"]
+            elif self.state == PetState.FALLING or self.state == PetState.THROWN: # Fallback for falling
+                frame_sprites = ["shime4.png", "shime4.png"]
             else:  # IDLE and other states
                 frame_sprites = ["shime1.png", "shime1a.png"]
             
@@ -252,12 +269,16 @@ class DesktopPet:
                         self.image = pygame.transform.flip(self.image, True, False)
     
     def _update_movement(self, dt: float, screen_bounds: Tuple[int, int]) -> None:
-        """Enhanced movement dengan better physics"""
+        """Enhanced movement dengan better physics (gravity, air resistance, bouncing)"""
         screen_width, screen_height = screen_bounds
         
         # Apply gravity if enabled and not on ground
         if self.gravity_enabled and not self.on_ground:
-            self.velocity_y += 500 * dt  # Gravity acceleration
+            self.velocity_y += self.GRAVITY_ACCELERATION * dt
+            
+            # Apply air resistance
+            self.velocity_x *= (1 - self.AIR_RESISTANCE_FACTOR * dt)
+            self.velocity_y *= (1 - self.AIR_RESISTANCE_FACTOR * dt)
         
         # Update position
         self.x += self.velocity_x * dt
@@ -268,25 +289,35 @@ class DesktopPet:
             # Horizontal boundaries
             if self.x < 0:
                 self.x = 0
-                self.velocity_x = 0
+                self.velocity_x *= -self.BOUNCE_COEFFICIENT # Bounce off wall
+                if abs(self.velocity_x) < self.MIN_BOUNCE_VELOCITY: self.velocity_x = 0
                 self._change_direction()
             elif self.x > screen_width - self.rect.width:
                 self.x = screen_width - self.rect.width
-                self.velocity_x = 0
+                self.velocity_x *= -self.BOUNCE_COEFFICIENT # Bounce off wall
+                if abs(self.velocity_x) < self.MIN_BOUNCE_VELOCITY: self.velocity_x = 0
                 self._change_direction()
             
-            # Ground collision
-            ground_y = screen_height - self.rect.height - AppConstants.SCREEN_MARGIN
+            # Ground collision (Floor)
+            ground_y = screen_height - self.rect.height - AppConstants.SCREEN_MARGIN # Ground level
             if self.y >= ground_y:
                 self.y = ground_y
-                self.velocity_y = 0
-                self.on_ground = True
                 
-                # Change state from falling to idle
-                if self.state == PetState.FALLING:
-                    self.change_state(PetState.IDLE)
+                # Check for bounce
+                if abs(self.velocity_y) > self.MIN_BOUNCE_VELOCITY:
+                    self.velocity_y *= -self.BOUNCE_COEFFICIENT # Bounce
+                    self.change_state(PetState.BOUNCING)
+                else:
+                    self.velocity_y = 0
+                    self.on_ground = True
+                    # Change state from falling/thrown to idle
+                    if self.state in [PetState.FALLING, PetState.THROWN, PetState.BOUNCING]:
+                        self.change_state(PetState.IDLE)
             else:
                 self.on_ground = False
+                if self.state not in [PetState.DRAGGING, PetState.FALLING, PetState.THROWN, PetState.BOUNCING]:
+                    # If somehow off ground without explicit state, set to falling
+                    self.change_state(PetState.FALLING)
     
     def _update_state_behavior(self, dt: float) -> None:
         """Enhanced state behavior management"""
@@ -306,6 +337,10 @@ class DesktopPet:
                 except:
                     animation_completed = True
             
+            # Reduce speed as we approach target
+            if distance_to_target < 50:
+                self.velocity_x *= 0.9 # Decelerate
+            
             if distance_to_target < 10 or animation_completed:
                 self.velocity_x = 0
                 self.change_state(PetState.IDLE)
@@ -317,7 +352,7 @@ class DesktopPet:
             if self.state_timer > 5.0:  # Sit for 5 seconds
                 self.change_state(PetState.IDLE)
         
-        elif self.state in [PetState.POSE, PetState.EAT_BERRY, PetState.THROW_NEEDLE]:
+        elif self.state in [PetState.POSE, PetState.EAT_BERRY, PetState.THROW_NEEDLE, PetState.WATCH]:
             # Special actions - wait for animation to complete
             animation_completed = True
             if self.animation_manager:
@@ -328,12 +363,23 @@ class DesktopPet:
             
             if animation_completed or self.state_timer > 3.0:  # Fallback timeout
                 self.change_state(PetState.IDLE)
-                self.stats.special_actions_performed += 1
+                if self.state != PetState.WATCH: # Watching can be a longer state
+                    self.stats.special_actions_performed += 1
         
-        elif self.state == PetState.WATCH:
-            # Watch behavior - stay focused
-            if self.state_timer > 10.0:  # Watch for 10 seconds
+        elif self.state == PetState.FALLING or self.state == PetState.THROWN:
+            # While falling/thrown, ensure gravity is active
+            self.gravity_enabled = True
+            # No specific timer-based transition here, handled by ground collision in _update_movement
+        
+        elif self.state == PetState.BOUNCING:
+            # Bounce state is brief, transitions to IDLE when velocity is low or on ground
+            if self.on_ground and abs(self.velocity_y) < self.MIN_BOUNCE_VELOCITY:
                 self.change_state(PetState.IDLE)
+            self.gravity_enabled = True # Keep gravity on during bounce
+
+        elif self.state == PetState.DRAGGING:
+            # While dragging, disable gravity
+            self.gravity_enabled = False
     
     def _update_behavioral_ai(self, dt: float) -> None:
         """Advanced AI untuk behavior selection"""
@@ -408,7 +454,16 @@ class DesktopPet:
         direction = random.choice([-1, 1])
         distance = random.randint(50, max_distance)
         
-        self.target_x = max(0, min(1920, self.x + (distance * direction)))  # Clamp to screen
+        # Clamp to screen to avoid targets outside bounds (using a simplified width for now)
+        # Assumes screen_width can be accessed (e.g., passed from PygameWindow or config)
+        # For a truly robust system, DesktopPet needs screen_width from PygameWindow init
+        # For now, let's use a wide arbitrary range, as _update_movement will clamp.
+        self.target_x = self.x + (distance * direction) 
+        
+        # Ensure target_x doesn't go too far off-screen initially
+        # A more robust solution would pass screen_width from PygameWindow
+        self.target_x = max(0.0, min(1920.0, self.target_x)) # Assuming typical desktop width for initial target
+        
         self.facing_right = direction > 0
         
         # Update animation facing direction
@@ -458,7 +513,8 @@ class DesktopPet:
                 try:
                     loop_animation = new_state in [PetState.IDLE, PetState.WALKING, 
                                                  PetState.RUNNING, PetState.SITTING,
-                                                 PetState.GRAB_WALL, PetState.GRAB_CEILING]
+                                                 PetState.GRAB_WALL, PetState.GRAB_CEILING,
+                                                 PetState.BOUNCING] # Add bouncing to looped animations if applicable
                     self.animation_manager.play_action(new_state.value, loop=loop_animation)
                 except Exception as e:
                     print(f"Error starting animation for {new_state.value}: {e}")
@@ -466,11 +522,25 @@ class DesktopPet:
             # State-specific initialization
             if new_state == PetState.SITTING:
                 self.velocity_x = 0
-            elif new_state == PetState.FALLING:
+                self.velocity_y = 0
+                self.gravity_enabled = False # No gravity when sitting firmly
+                self.on_ground = True
+            elif new_state == PetState.FALLING or new_state == PetState.THROWN:
                 self.on_ground = False
+                self.gravity_enabled = True
             elif new_state == PetState.DRAGGING:
                 self.velocity_x = 0
                 self.velocity_y = 0
+                self.gravity_enabled = False
+                self.on_ground = False # Assume dragging takes it off ground
+            elif new_state == PetState.BOUNCING:
+                self.on_ground = False # Temporarily off ground during bounce
+                self.gravity_enabled = True # Gravity always active during bounce for realistic arc
+            elif new_state == PetState.IDLE:
+                self.velocity_x = 0
+                self.velocity_y = 0
+                self.on_ground = True
+                self.gravity_enabled = True # Gravity still relevant if it walks off an edge
     
     def handle_mouse_down(self, pos: Tuple[int, int], button: int) -> str:
         """Enhanced mouse handling"""
@@ -504,23 +574,29 @@ class DesktopPet:
                     self.change_state(PetState.SITTING)
                 else:
                     # If already sitting, do a special action
-                    special_actions = [PetState.POSE, PetState.EAT_BERRY, PetState.WATCH]
+                    special_actions = [PetState.POSE, PetState.EAT_BERRY, PetState.WATCH, PetState.THROW_NEEDLE]
                     chosen_action = random.choice(special_actions)
                     self.change_state(chosen_action)
                 return "sit"
         
         return "none"
     
-    def handle_mouse_up(self, button: int) -> str:
-        """Enhanced mouse up handling"""
+    def handle_mouse_up(self, button: int, mouse_dx: float = 0.0, mouse_dy: float = 0.0) -> str:
+        """Enhanced mouse up handling with throw physics"""
         if button == 1 and self.dragging:  # Left click release
             self.dragging = False
             
-            # Return to appropriate state based on position
-            if self.on_ground:
-                self.change_state(PetState.IDLE)
-            else:
-                self.change_state(PetState.FALLING)
+            # Apply throw velocity based on mouse movement
+            # Scale mouse_dx, dy to get initial throw velocity
+            self.velocity_x = mouse_dx * self.DRAG_THROW_MULTIPLIER
+            self.velocity_y = mouse_dy * self.DRAG_THROW_MULTIPLIER
+            
+            # Transition to THROWN state (or FALLING if THROWN animation is not distinct)
+            # The XML has a 'Thrown' action that uses cursor dx/dy, we are now overriding that with our own physics.
+            # So we directly set the velocity and change state to FALLING or THROWN.
+            self.change_state(PetState.THROWN) # Use THROWN state for visual distinction
+            self.on_ground = False # Ensure it's considered airborne
+            self.gravity_enabled = True
             
             return "drag_end"
         
@@ -532,7 +608,7 @@ class DesktopPet:
             self.x = float(pos[0] - self.drag_offset_x) 
             self.y = float(pos[1] - self.drag_offset_y)
             
-            # Update target position
+            # Update target position (though not relevant while dragging)
             self.target_x = self.x
             self.target_y = self.y
     
@@ -602,6 +678,10 @@ class DesktopPet:
             'target_y': self.target_y,
             'state': self.state.value,
             'facing_right': self.facing_right,
+            'velocity_x': self.velocity_x, # Save velocities
+            'velocity_y': self.velocity_y,
+            'on_ground': self.on_ground, # Save on_ground state
+            'gravity_enabled': self.gravity_enabled, # Save gravity state
             'stats': {
                 'health': self.stats.health,
                 'happiness': self.stats.happiness,
@@ -627,6 +707,10 @@ class DesktopPet:
         pet.target_x = state_data.get('target_x', pet.x)
         pet.target_y = state_data.get('target_y', pet.y)
         pet.facing_right = state_data.get('facing_right', True)
+        pet.velocity_x = state_data.get('velocity_x', 0.0) # Load velocities
+        pet.velocity_y = state_data.get('velocity_y', 0.0)
+        pet.on_ground = state_data.get('on_ground', True) # Load on_ground state
+        pet.gravity_enabled = state_data.get('gravity_enabled', True) # Load gravity state
         
         # Restore state
         try:
@@ -675,16 +759,17 @@ class DesktopPet:
         pygame.draw.rect(screen, (255, 0, 0), self.rect, 1)
         
         # Draw velocity vector
-        if abs(self.velocity_x) > 0 or abs(self.velocity_y) > 0:
-            start_pos = (self.rect.centerx, self.rect.centery)
-            end_pos = (
-                int(start_pos[0] + self.velocity_x / 10),
-                int(start_pos[1] + self.velocity_y / 10)
-            )
-            pygame.draw.line(screen, (0, 255, 0), start_pos, end_pos, 2)
+        # Scale velocity vector for visibility
+        scale_factor = 0.1 
+        start_pos = (self.rect.centerx, self.rect.centery)
+        end_pos = (
+            int(start_pos[0] + self.velocity_x * scale_factor),
+            int(start_pos[1] + self.velocity_y * scale_factor)
+        )
+        pygame.draw.line(screen, (0, 255, 0), start_pos, end_pos, 2)
         
         # Draw target position
-        if abs(self.target_x - self.x) > 5:
+        if abs(self.target_x - self.x) > 5 or abs(self.target_y - self.y) > 5:
             target_rect = pygame.Rect(int(self.target_x), int(self.target_y), 5, 5)
             pygame.draw.rect(screen, (0, 0, 255), target_rect)
         
@@ -706,7 +791,11 @@ class DesktopPet:
                 (self.rect.left + 5, self.rect.top + 10),
                 (self.rect.left + 10, self.rect.top + 15)
             ])
-    
+        
+        # Display velocity values
+        velocity_text = font.render(f"Vel: ({self.velocity_x:.0f}, {self.velocity_y:.0f})", True, (255, 255, 255))
+        screen.blit(velocity_text, (self.rect.x, self.rect.y - 45))
+
     def _draw_stats_overlay(self, screen: pygame.Surface) -> None:
         """Draw stats overlay untuk monitoring"""
         font = pygame.font.Font(None, 16)
@@ -771,7 +860,3 @@ class DesktopPet:
         # Clear references
         self.animation_manager = None
         self.current_sprite = None
-
-
-# Export classes
-__all__ = ['DesktopPet', 'PetState', 'PetStats']

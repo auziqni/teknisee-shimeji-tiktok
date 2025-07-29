@@ -16,6 +16,7 @@ from sprite_loader import get_sprite_loader
 
 if TYPE_CHECKING:
     from pet_behavior import DesktopPet
+    from control_panel import ControlPanel # Import ControlPanel for type hinting
 
 
 class PygameWindow:
@@ -50,12 +51,39 @@ class PygameWindow:
         self.frame_count = 0
         self.fps_counter = 0.0
         self.last_fps_update = time.time()
+
+        # Mouse tracking for velocity (new)
+        self.last_mouse_pos: Optional[Tuple[int, int]] = None
+        self.current_mouse_pos: Optional[Tuple[int, int]] = None
+        self.mouse_dx: float = 0.0
+        self.mouse_dy: float = 0.0
         
         # Configuration
         self.config = get_config()
         self.sprite_loader = get_sprite_loader()
         
+        # Reference to control panel for signal connection (will be set after control panel is created)
+        self.control_panel: Optional['ControlPanel'] = None 
+
         print(f"Pygame window initialized: {self.screen_width}x{self.screen_height}")
+    
+    def set_control_panel(self, panel: 'ControlPanel') -> None:
+        """Set the control panel instance and connect signals."""
+        self.control_panel = panel
+        # Connect the settings_changed signal to a handler in PygameWindow
+        self.control_panel.settings_changed.connect(self._on_settings_changed)
+        print("Control panel connected to PygameWindow for settings updates.")
+
+    def _on_settings_changed(self, setting_name: str, value: Any) -> None:
+        """Handle settings changes from the control panel."""
+        # Update the config manager first
+        self.config.set(f'settings.{setting_name}', value) 
+        print(f"Setting changed: {setting_name} = {value}. Propagating to pets...")
+
+        # Propagate changes to all active pets if it's a physics setting
+        if setting_name.startswith('physics_'):
+            for pet in self.pets:
+                pet.update_physics_parameters() # Call new method on DesktopPet
     
     def _setup_window_properties(self) -> None:
         """Setup window properties for always-on-top behavior"""
@@ -128,6 +156,13 @@ class PygameWindow:
     
     def handle_events(self) -> None:
         """Handle pygame events and pet interactions"""
+        # Update current mouse position for velocity calculation
+        self.current_mouse_pos = pygame.mouse.get_pos()
+        if self.last_mouse_pos:
+            self.mouse_dx = self.current_mouse_pos[0] - self.last_mouse_pos[0]
+            self.mouse_dy = self.current_mouse_pos[1] - self.last_mouse_pos[1]
+        self.last_mouse_pos = self.current_mouse_pos
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
@@ -136,7 +171,8 @@ class PygameWindow:
                 self._handle_mouse_down(event.pos, event.button)
             
             elif event.type == pygame.MOUSEBUTTONUP:
-                self._handle_mouse_up(event.button)
+                # Pass current mouse velocity (dx, dy) to handle_mouse_up
+                self._handle_mouse_up(event.button, self.mouse_dx, self.mouse_dy)
             
             elif event.type == pygame.MOUSEMOTION:
                 self._handle_mouse_motion(event.pos)
@@ -157,10 +193,10 @@ class PygameWindow:
                 # Pet handled the click, stop processing
                 break
     
-    def _handle_mouse_up(self, button: int) -> None:
+    def _handle_mouse_up(self, button: int, mouse_dx: float, mouse_dy: float) -> None:
         """Handle mouse button up events"""
         for pet in self.pets:
-            pet.handle_mouse_up(button)
+            pet.handle_mouse_up(button, mouse_dx, mouse_dy) # Pass mouse dx, dy
     
     def _handle_mouse_motion(self, pos: Tuple[int, int]) -> None:
         """Handle mouse motion for dragging"""

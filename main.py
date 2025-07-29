@@ -17,6 +17,7 @@ from sprite_loader import SpriteDiscovery, init_sprite_loader
 from gui_manager import PygameWindow
 from control_panel import ControlPanel
 
+
 # Test animation system availability
 try:
     from utils.animation import AnimationManager, create_animation_manager
@@ -86,6 +87,9 @@ class TechniseeShimeji:
             print("Initializing control panel...")
             self.control_panel = ControlPanel(self.pygame_window)
             self.control_panel.show()
+            
+            # Connect control panel to pygame window for settings updates
+            self.pygame_window.set_control_panel(self.control_panel) # NEW LINE
             
             # Setup pygame timer for non-blocking updates
             print("Setting up pygame timer...")
@@ -168,7 +172,7 @@ class TechniseeShimeji:
         print(f"⚙️  Control Panel: Open and ready")
         print(f"{'='*60}")
         print(f"📋 Controls:")
-        print(f"   • Left-click + drag: Move pets")
+        print(f"   • Left-click + drag: Move pets (now with throw physics!)")
         print(f"   • Right-click: Make pet sit / special actions")
         print(f"   • Double right-click: Remove pet")
         print(f"   • Control Panel: Spawn pets, adjust settings")
@@ -177,8 +181,8 @@ class TechniseeShimeji:
         print(f"{'='*60}")
         
         if ANIMATION_SYSTEM_AVAILABLE:
-            print(f"🎊 Phase 1 Step 3 COMPLETE!")
-            print(f"   Your pets now have XML-driven animations!")
+            print(f"🎊 Phase 1 Step 4 COMPLETE!")
+            print(f"   Your pets now have realistic throw physics and improved falling!")
         else:
             print(f"⚠️  Running in compatibility mode")
             print(f"   To enable XML animations, ensure utils/animation.py is available")

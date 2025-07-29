@@ -35,7 +35,15 @@ class ConfigManager:
                 "screen_boundaries": True,
                 "auto_save": True,
                 "spawn_x": None,  # None = auto-center
-                "spawn_y": None   # None = auto-bottom
+                "spawn_y": None,   # None = auto-bottom
+                "debug_mode": False, # Add debug_mode default
+                "show_stats": False, # Add show_stats default
+                # New physics settings
+                "physics_gravity_acceleration": 980,  # pixels/second^2
+                "physics_air_resistance_factor": 0.001, # Factor to reduce velocity
+                "physics_bounce_coefficient": 0.6,    # % of velocity retained on bounce (0.0-1.0)
+                "physics_min_bounce_velocity": 100,    # Min vertical velocity for bounce to occur
+                "physics_drag_throw_multiplier": 2.0, # Multiplier for mouse drag velocity when throwing
             },
             "tiktok": {
                 "enabled": False,
@@ -52,7 +60,8 @@ class ConfigManager:
                 "control_panel_x": 100,
                 "control_panel_y": 100,
                 "selected_sprite": ""
-            }
+            },
+            "active_pets": [] # Added active_pets to default config
         }
     
     def load_config(self) -> Dict[str, Any]:
@@ -136,7 +145,7 @@ class ConfigManager:
         """Validate configuration structure and values"""
         try:
             # Check required sections exist
-            required_sections = ['settings', 'tiktok', 'sprite_packs', 'logging', 'ui']
+            required_sections = ['settings', 'tiktok', 'sprite_packs', 'logging', 'ui', 'active_pets']
             for section in required_sections:
                 if section not in self.config:
                     print(f"Missing config section: {section}")
@@ -152,6 +161,31 @@ class ConfigManager:
             if not (10 <= freq <= 100):
                 print(f"Invalid behavior frequency: {freq}")
                 return False
+
+            gravity = self.get('settings.physics_gravity_acceleration')
+            if not (0 <= gravity <= 5000): # Reasonable range
+                print(f"Invalid gravity value: {gravity}")
+                return False
+
+            air_resistance = self.get('settings.physics_air_resistance_factor')
+            if not (0.0 <= air_resistance <= 0.1): # Reasonable range
+                print(f"Invalid air resistance value: {air_resistance}")
+                return False
+
+            bounce_coeff = self.get('settings.physics_bounce_coefficient')
+            if not (0.0 <= bounce_coeff <= 1.0): # Must be between 0 and 1
+                print(f"Invalid bounce coefficient value: {bounce_coeff}")
+                return False
+
+            min_bounce_vel = self.get('settings.physics_min_bounce_velocity')
+            if not (0 <= min_bounce_vel <= 1000): # Reasonable range
+                print(f"Invalid min bounce velocity value: {min_bounce_vel}")
+                return False
+
+            drag_throw_mult = self.get('settings.physics_drag_throw_multiplier')
+            if not (0.0 <= drag_throw_mult <= 10.0): # Reasonable range
+                print(f"Invalid drag throw multiplier value: {drag_throw_mult}")
+                return False
             
             return True
             
@@ -165,7 +199,7 @@ class AppConstants:
     """Application-wide constants and settings"""
     
     # Version information
-    VERSION = "Phase 1 Step 2"
+    VERSION = "Phase 1 Step 4" # Updated to P1S4
     APP_NAME = "Teknisee Shimeji TikTok"
     
     # File paths
