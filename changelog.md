@@ -8,6 +8,314 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Phase 1: Foundation & Basic Interactions
 
+## [P1S4-Direction-Fix] - 2024-12-19 - Movement Direction Fix ✅
+
+### Fixed
+
+- **Movement Direction Issue**
+
+  - **Root Cause Identified**: Animation velocity from XML was hardcoded to left movement (-2,0) and applied directly
+  - **Direction-Aware Velocity**: Modified velocity application to be direction-aware in `_update_movement_with_boundaries`
+  - **Animation Velocity Inversion**: Animation velocity now inverts when `facing_right=True` to move in correct direction
+  - **Proper Movement Logic**: Sprites now move in the direction they are facing, not always left
+
+- **Animation System Enhancement**
+
+  - **Direction-Aware Animation**: Animation velocity application now considers pet's facing direction
+  - **Velocity Inversion Logic**: Added logic to invert X velocity when pet is facing right
+  - **Movement Consistency**: Ensured visual direction matches movement direction
+  - **Animation Integration**: Maintained proper animation display while fixing movement direction
+
+### Technical Implementation
+
+- **Enhanced Method**:
+
+  ```python
+  _update_movement_with_boundaries()  # Added direction-aware velocity application
+  ```
+
+- **Velocity Application Logic**:
+
+  ```python
+  # Apply velocity based on facing direction
+  # If facing right, invert the X velocity from animation (which is hardcoded to left)
+  velocity_x = velocity[0] * dt
+  if self.facing_right and velocity[0] != 0:
+      velocity_x = -velocity[0] * dt  # Invert for right-facing movement
+  ```
+
+### Testing
+
+- **Comprehensive Test Suite**: `test_direction_fix.py`
+- **Direction Verification**: Tests that sprites move in correct direction based on facing_right
+- **Velocity Analysis**: Monitors velocity_x values during movement
+- **Movement Tracking**: Tracks actual position changes to verify direction
+
+### Performance
+
+- **Correct Movement**: Sprites now move in the direction they are facing
+- **Animation Consistency**: Visual animation matches movement direction
+- **No Performance Impact**: Direction fix has negligible performance cost
+
+## [P1S4-Debug-Arrow-Fix] - 2024-12-19 - Debug Arrow Consistency Fix ✅
+
+### Fixed
+
+- **Debug Arrow Inconsistency**
+
+  - **Root Cause Identified**: Debug arrow used `self.facing_right` property instead of visual direction
+  - **Visual Direction Mismatch**: Arrow showed wrong direction during wall climbing despite correct sprite visual
+  - **Wall Climbing Logic**: Arrow now correctly shows direction based on wall side (facing toward wall)
+  - **Consistent Debug Display**: Debug arrow now matches actual sprite visual direction
+
+- **Wall Climbing Debug Enhancement**
+
+  - **Visual Direction Detection**: Debug arrow now correctly handles wall climbing scenarios
+  - **Consistent Arrow Display**: Arrow direction matches sprite visual direction during wall climbing
+  - **Enhanced Debug Information**: More accurate debug information for wall climbing scenarios
+  - **Wall Side Logic**: Arrow shows correct direction based on which wall sprite is on
+
+### Technical Implementation
+
+- **Enhanced Method**:
+
+  ```python
+  _draw_debug_info()  # Added wall climbing visual direction logic
+  ```
+
+- **Visual Direction Logic**:
+
+  ```python
+  # Draw facing direction indicator (consisten dengan visual direction)
+  visual_facing_right = self.facing_right
+  
+  # Untuk wall climbing, sprite menghadap ke dinding (bukan menjauh dari dinding)
+  if self.on_wall and self.wall_side:
+      if self.wall_side == 'left':
+          visual_facing_right = False  # Sprite menghadap kiri (ke dinding kiri)
+      elif self.wall_side == 'right':
+          visual_facing_right = True  # Sprite menghadap kanan (ke dinding kanan)
+  ```
+
+- **Additional Fixes**:
+
+  ```python
+  # Fixed _handle_drag_wall_collision() - sprite faces towards wall
+  if side == 'left':
+      self.facing_right = False  # Face toward left wall
+  else:  # right
+      self.facing_right = True  # Face toward right wall
+  
+  # Fixed change_state() for wall climbing - sprite faces towards wall
+  if self.wall_side == 'left':
+      self.facing_right = False  # Face left (toward left wall)
+  elif self.wall_side == 'right':
+      self.facing_right = True  # Face right (toward right wall)
+  ```
+
+### Testing
+
+- **Comprehensive Test Suite**: `test_arrow_debug_final.py`
+- **Normal Movement Arrow**: Tests arrow direction during normal movement
+- **Wall Climbing Arrow**: Verifies arrow consistency during wall climbing states
+- **Drag Wall Arrow**: Tests arrow consistency when dragged to walls
+
+### Performance
+
+- **Accurate Debug Display**: Debug arrow now shows correct visual direction
+- **Consistent Debug Information**: Arrow direction matches sprite visual during all states
+- **Enhanced Debugging**: Better debugging experience for wall climbing scenarios
+
+## [P1S4-Animation-Fixes] - 2024-12-19 - Animation Display & Direction Change Fixes ✅
+
+### Fixed
+
+- **Wall Climbing Animation Display**
+
+  - **Proper Animation Integration**: Fixed wall climbing animations not displaying correctly
+  - **Animation Direction Control**: Improved facing direction control during wall climbing
+  - **Smooth State Transitions**: Enhanced transitions between GrabWall and ClimbWall states
+  - **Animation Velocity Integration**: Proper velocity application from XML animations
+  - **Wall Climbing Duration**: Increased climbing duration to 10 seconds for better visibility
+
+- **Direction Change Glitch Prevention**
+
+  - **Direction Change Cooldown**: Added 0.5-second cooldown to prevent rapid direction changes
+  - **Direction Lock System**: Implemented direction locking to prevent glitches during collisions
+  - **Corner Collision Fixes**: Enhanced corner collision handling with 0.8-second direction lock
+  - **Wall Turn Around Fixes**: Improved wall turn around with 0.6-second direction lock
+  - **Wall Climbing Direction Lock**: 2-second direction lock during wall climbing states
+
+- **Animation System Improvements**
+
+  - **Enhanced Error Handling**: Better error handling for animation direction changes
+  - **Animation State Management**: Improved state transitions with proper animation loading
+  - **Facing Direction Logic**: Fixed facing direction logic for wall climbing animations
+  - **Animation Debug Logging**: Added debug logging for animation state changes
+
+### Enhanced
+
+- **Wall Climbing Physics**
+
+  - **Smoother Climbing Speed**: Reduced climbing speed to 25 pixels/second for smoother animation
+  - **Increased Ceiling Threshold**: Increased ceiling detection threshold to 80 pixels
+  - **Extended Climbing Duration**: Increased maximum climbing time to 10 seconds
+  - **Better Wall Side Detection**: Improved wall side detection and facing direction logic
+
+- **Collision System**
+
+  - **Corner Collision Enhancement**: Improved corner collision with longer movement distances
+  - **Wall Turn Around Enhancement**: Enhanced wall turn around with longer movement distances
+  - **Direction Lock Integration**: Integrated direction locking into all collision handlers
+  - **Collision Cooldown System**: Enhanced collision cooldown to prevent rapid oscillations
+
+- **State Management**
+
+  - **Direction Lock Timer**: Added direction lock timer tracking in update method
+  - **State Transition Logging**: Enhanced logging for state transitions and direction changes
+  - **Animation Error Recovery**: Improved error recovery for animation system failures
+  - **Wall Climbing State Persistence**: Better state persistence during wall climbing
+
+### Technical Implementation
+
+- **New Methods Added**:
+
+  ```python
+  _lock_direction(duration: float)  # Lock direction changes
+  ```
+
+- **Enhanced Methods**:
+
+  ```python
+  _change_direction()                # Added cooldown and lock checks
+  _handle_corner_collision()         # Added direction locking
+  _handle_wall_turn_around()         # Added direction locking
+  change_state()                     # Enhanced wall climbing states
+  update()                           # Added direction lock timer
+  ```
+
+- **Direction Change Flow**:
+
+  ```
+  Direction Change Request → Cooldown Check → Lock Check → Direction Change
+  Corner Collision → Direction Lock (0.8s) → Smooth Turn Away
+  Wall Turn Around → Direction Lock (0.6s) → Smooth Turn Around
+  Wall Climbing → Direction Lock (2.0s) → Stable Climbing
+  ```
+
+### Testing
+
+- **Comprehensive Test Suite**: `test_animation_fixes.py`
+- **Direction Change Cooldown**: Tests rapid direction change prevention
+- **Wall Climbing Animation**: Tests animation integration and state transitions
+- **Corner Collision Fixes**: Tests direction locking in corner collisions
+- **Animation Display**: Tests animation state changes and error handling
+
+### Performance
+
+- **Reduced Glitches**: Eliminated rapid direction changes that caused visual glitches
+- **Smoother Animations**: Improved animation transitions and display
+- **Better Collision Handling**: Enhanced collision response with direction locking
+- **Stable Wall Climbing**: More stable and visible wall climbing animations
+
+## [P1S4-Enhanced] - 2024-12-19 - Enhanced Wall Climbing System ✅
+
+### Added
+
+- **Enhanced Wall Climbing System**
+
+  - **Wall Sticking During Drag**: Pets now stick to walls when dragged past wall boundaries
+  - **Drag Boundary Prevention**: Pets cannot be dragged past wall boundaries, preventing wall crossing
+  - **Proper Animation Integration**: Wall climbing uses GrabWall and ClimbWall animations from XML
+  - **Wall Collision Detection**: Improved collision detection for left/right walls during drag
+  - **Wall Climbing Physics**: Pets can climb walls with proper gravity and physics handling
+
+- **Enhanced Mouse Interaction**
+
+  - **Drag Wall Collision**: `_handle_drag_wall_collision()` method for wall sticking during drag
+  - **Boundary Prevention**: Mouse motion handler prevents crossing wall boundaries
+  - **Wall Sticking Release**: Proper release of wall sticking state when drag ends
+  - **Position Clamping**: Automatic position clamping to keep pets within boundaries
+
+- **Improved Wall Climbing Behavior**
+
+  - **GrabWall State**: Pets grab walls before climbing (1 second delay)
+  - **ClimbWall State**: Pets climb walls with proper animation and physics
+  - **Climbing Duration**: Maximum 8 seconds of climbing before getting tired
+  - **Ceiling Detection**: Pets stop climbing when reaching ceiling area
+  - **Energy System**: Wall climbing consumes energy, sitting restores energy
+
+- **Enhanced Animation System**
+
+  - **XML Animation Integration**: Uses GrabWall and ClimbWall animations from actions.xml
+  - **Proper Facing Direction**: Pets face away from walls during climbing
+  - **Animation State Management**: Smooth transitions between wall climbing states
+  - **Velocity Integration**: Animation velocity properly applied during climbing
+
+### Enhanced
+
+- **Boundary Collision System**
+
+  - **Improved Collision Detection**: Better handling of wall, ground, and ceiling collisions
+  - **Wall Collision Logic**: Enhanced `_handle_wall_collision()` with proper wall climbing
+  - **Ground Collision**: Improved ground collision with bounce physics
+  - **Ceiling Collision**: Added ceiling collision handling for future use
+
+- **Physics System**
+
+  - **Wall Sticking Physics**: Gravity disabled while on walls
+  - **Climbing Physics**: Proper velocity and position management during climbing
+  - **Drag Physics**: Enhanced drag physics with wall boundary respect
+  - **Energy Management**: Wall climbing consumes energy, affects behavior
+
+- **State Management**
+
+  - **Wall Climbing States**: Proper state transitions for GrabWall and ClimbWall
+  - **Animation Integration**: State changes trigger appropriate animations
+  - **Wall Side Tracking**: Proper tracking of which wall pet is climbing
+  - **State Persistence**: Wall climbing state properly saved and restored
+
+### Technical Implementation
+
+- **New Methods Added**:
+
+  ```python
+  _handle_drag_wall_collision(side: str)  # Wall sticking during drag
+  _handle_ground_collision()              # Ground collision handling
+  _handle_ceiling_collision()             # Ceiling collision handling
+  ```
+
+- **Enhanced Methods**:
+
+  ```python
+  _handle_wall_collision()                # Improved wall collision with climbing
+  handle_mouse_motion()                   # Boundary prevention during drag
+  handle_mouse_up()                       # Wall sticking release
+  _update_state_behavior()                # Enhanced wall climbing behavior
+  ```
+
+- **Wall Climbing Flow**:
+
+  ```
+  Wall Collision → GrabWall (1s) → ClimbWall (8s max) → Fall
+  Drag to Wall → Wall Sticking → Release → Throw Physics
+  ```
+
+### Testing
+
+- **Comprehensive Test Suite**: `test_wall_climbing_enhanced.py`
+- **Wall Collision Detection**: Tests boundary collision detection
+- **Drag Boundary Prevention**: Tests wall crossing prevention
+- **Animation Integration**: Tests XML animation loading
+- **Wall Climbing Behavior**: Tests climbing physics and timing
+
+### Performance
+
+- **Optimized Collision Detection**: Efficient boundary checking
+- **Memory Management**: Proper cleanup of wall climbing states
+- **Animation Performance**: Smooth wall climbing animations
+- **Physics Optimization**: Efficient wall climbing physics calculations
+
 ## [P1S3] - 2024-07-29 - XML Parser & Animation System ✅
 
 ### Added

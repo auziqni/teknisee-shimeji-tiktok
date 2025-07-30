@@ -116,6 +116,10 @@ class DesktopPet:
         self.direction_lock_duration = 0.3  # Lock direction for this duration
         self.last_wall_side = None
         
+        # Enhanced direction change cooldown to prevent glitches
+        self.direction_change_cooldown = 0.5  # seconds
+        self.last_direction_change = 0.0
+        
         # Animation system - with fallback
         self.animation_manager = None
         if ANIMATION_SYSTEM_AVAILABLE and create_animation_manager:
@@ -214,166 +218,111 @@ class DesktopPet:
                 self.animation_manager = None
     
     def update(self, dt: float, screen_bounds: Tuple[int, int]) -> None:
-        """Enhanced update dengan boundary system integration"""
+        """Enhanced update method with direction lock timer and improved wall climbing"""
+        # Update timers
         self.state_timer += dt
         self.behavior_timer += dt
-        self.stats.time_in_current_state += dt
         self.wall_climb_timer += dt
+        self.direction_lock_timer += dt  # Update direction lock timer
         
-        # Update collision prevention timers
-        self.last_collision_time += dt
-        self.direction_lock_timer += dt
+        # Update rectangle position
+        self.rect.x = int(self.x)
+        self.rect.y = int(self.y)
         
-        # Update animation system
-        if self.animation_manager:
-            try:
-                self.current_sprite, anim_velocity = self.animation_manager.update(dt)
-                
-                # Use animation velocity only for specific states
-                if not self.dragging and self.state in [PetState.WALKING, PetState.RUNNING]:
-                    # Apply velocity based on facing direction
-                    # Animation velocity is positive for right movement, negative for left
-                    if self.facing_right:
-                        self.velocity_x = abs(anim_velocity[0])  # Always positive for right
-                    else:
-                        self.velocity_x = -abs(anim_velocity[0])  # Always negative for left
-                    self.velocity_y = anim_velocity[1]
-                    
-                    # Debug: Log velocity application
-                    if self.config.get('settings.debug_mode', False):
-                        print(f"Pet {self.pet_id} velocity: anim_velocity={anim_velocity[0]:.1f}, facing_right={self.facing_right}, applied_velocity={self.velocity_x:.1f}")
-                
-                if self.current_sprite:
-                    self.image = self.current_sprite
-            except Exception as e:
-                print(f"Error updating animation: {e}")
-                self._update_fallback_animation(dt)
-        else:
-            self._update_fallback_animation(dt)
+        # Update movement with boundaries
+        self._update_movement_with_boundaries(dt, screen_bounds)
         
-        # Update position based on velocity (with boundary integration)
-        if not self.dragging:
-            self._update_movement_with_boundaries(dt, screen_bounds)
-        
-        # Update state-specific behavior
+        # Update state behavior
         self._update_state_behavior(dt)
         
         # Update behavioral AI
         self._update_behavioral_ai(dt)
         
-        # Update statistics  
+        # Update stats
         self._update_stats(dt)
-        
-        # Update sprite rect position
-        self.rect.x = int(self.x)
-        self.rect.y = int(self.y)
     
     def _update_movement_with_boundaries(self, dt: float, screen_bounds: Tuple[int, int]) -> None:
-        """Enhanced movement dengan boundary collision detection"""
+        """Enhanced movement with boundary collision detection and wall climbing"""
         if not self.boundary_manager:
-            # Fallback to old boundary system
             self._update_movement_fallback(dt, screen_bounds)
             return
-        
-        # Apply gravity if enabled and not on ground/wall
-        if self.gravity_enabled and not self.on_ground and not self.on_wall:
-            self.velocity_y += self.GRAVITY_ACCELERATION * dt
-            
-            # Apply air resistance
-            self.velocity_x *= (1 - self.AIR_RESISTANCE_FACTOR * dt)
-            self.velocity_y *= (1 - self.AIR_RESISTANCE_FACTOR * dt)
         
         # Store previous position for collision detection
         prev_x = self.x
         prev_y = self.y
+        
+        # Update position based on current state
+        if self.state == PetState.DRAGGING:
+            # While dragging, only update position if not wall-stuck
+            if not self.on_wall:
+                # Normal drag movement - position is set by mouse motion
+                pass
+        else:
+            # Apply velocity and gravity
+            if self.gravity_enabled:
+                self.velocity_y += self.GRAVITY_ACCELERATION * dt
+            
+            # Apply air resistance
+            self.velocity_x *= (1 - self.AIR_RESISTANCE_FACTOR)
+            self.velocity_y *= (1 - self.AIR_RESISTANCE_FACTOR)
         
         # Update position
         self.x += self.velocity_x * dt
         self.y += self.velocity_y * dt
         
         # Check boundary collisions
-        if self.config.get('settings.screen_boundaries', True):
-            collision = self.boundary_manager.check_boundary_collision(
-                self.x, self.y, self.rect.width, self.rect.height
-            )
-            
-            self._handle_boundary_collisions(collision, prev_x, prev_y)
+        collision = self.boundary_manager.check_boundary_collision(
+            self.x, self.y, self.rect.width, self.rect.height
+        )
+        
+        # Handle collisions
+        self._handle_boundary_collisions(collision, prev_x, prev_y)
+        
+        # Update animation
+        if self.animation_manager:
+            try:
+                current_sprite, velocity = self.animation_manager.update(dt)
+                # Update the displayed sprite
+                if current_sprite:
+                    self.image = current_sprite
+                # Apply animation velocity if not dragging, with direction awareness
+                if self.state != PetState.DRAGGING:
+                    # Apply velocity based on facing direction
+                    # If facing right, invert the X velocity from animation (which is hardcoded to left)
+                    velocity_x = velocity[0] * dt
+                    if self.facing_right and velocity[0] != 0:
+                        velocity_x = -velocity[0] * dt  # Invert for right-facing movement
+                    
+                    self.velocity_x += velocity_x
+                    self.velocity_y += velocity[1] * dt
+            except Exception as e:
+                print(f"Animation update error: {e}")
+                self._update_fallback_animation(dt)
+        
+        # Update stats
+        self._update_stats(dt)
     
     def _handle_boundary_collisions(self, collision: Dict[str, bool], prev_x: float, prev_y: float) -> None:
-        """Handle boundary collisions with improved corner and wall logic"""
+        """Enhanced boundary collision handling with wall climbing and drag support"""
         wall_climbing_enabled = self.config.get('boundaries.wall_climbing_enabled', True)
         
-        # Check collision cooldown to prevent rapid oscillation
-        if self.last_collision_time < self.collision_cooldown:
-            return
+        # Handle wall collisions
+        if collision['left_wall'] or collision['right_wall']:
+            side = 'left' if collision['left_wall'] else 'right'
+            self._handle_wall_collision(side, wall_climbing_enabled)
         
-        # PRIORITY 1: Handle ground collision FIRST
+        # Handle ground collision
         if collision['ground']:
-            boundaries = self.boundary_manager.boundaries
-            self.y = boundaries['ground_y'] - self.rect.height
-            
-            if abs(self.velocity_y) > self.MIN_BOUNCE_VELOCITY:
-                self.velocity_y *= -self.BOUNCE_COEFFICIENT
-                self.change_state(PetState.BOUNCING)
-            else:
-                self.velocity_y = 0
-                self.on_ground = True
-                self.on_wall = False
-                if self.state in [PetState.FALLING, PetState.THROWN, PetState.BOUNCING]:
-                    self.change_state(PetState.IDLE)
-        
-        # PRIORITY 2: Handle wall collisions with IMPROVED logic
-        wall_hit = collision['left_wall'] or collision['right_wall']
-        
-        if wall_hit:
-            boundaries = self.boundary_manager.boundaries
-            
-            # Determine wall side
-            if collision['left_wall']:
-                self.x = boundaries['left_wall_x']
-                wall_side = 'left'
-            else:  # right wall
-                self.x = boundaries['right_wall_x'] - self.rect.width
-                wall_side = 'right'
-            
-            # Check if this is a corner (wall + ground collision)
-            is_corner = collision['ground'] and wall_hit
-            
-            # Check direction lock to prevent rapid direction changes
-            can_change_direction = self.direction_lock_timer >= self.direction_lock_duration
-            
-            # Check if this is the same wall we just hit (prevent oscillation)
-            is_same_wall = (self.last_wall_side == wall_side)
-            
-            if self.on_ground and can_change_direction and not is_same_wall:
-                # Ground-based wall collision
-                if is_corner:
-                    # Corner collision - move away from wall
-                    self._handle_corner_collision(wall_side)
-                else:
-                    # Regular wall collision - simple turn around
-                    self._handle_wall_turn_around(wall_side)
-                
-                # Set collision cooldown and direction lock
-                self.last_collision_time = 0.0
-                self.direction_lock_timer = 0.0
-                self.last_wall_side = wall_side
-                
-            elif not self.on_ground:
-                # Air-based collision - simple bounce
-                self.velocity_x *= -self.BOUNCE_COEFFICIENT
-                if abs(self.velocity_x) < self.MIN_BOUNCE_VELOCITY:
-                    self.velocity_x = 0
-                
-                if can_change_direction:
-                    self._change_direction()
-                    self.direction_lock_timer = 0.0
+            self._handle_ground_collision()
         
         # Handle ceiling collision (for future use)
         if collision['ceiling']:
-            boundaries = self.boundary_manager.boundaries
-            self.y = boundaries['ceiling_y']
-            self.velocity_y = max(0, self.velocity_y)  # Stop upward movement
+            self._handle_ceiling_collision()
+        
+        # Special handling for drag + wall collision
+        if self.state == PetState.DRAGGING and (collision['left_wall'] or collision['right_wall']):
+            side = 'left' if collision['left_wall'] else 'right'
+            self._handle_drag_wall_collision(side)
     
     def _handle_wall_bounce(self, side: str) -> None:
         """Handle simple wall bounce when pet is on ground"""
@@ -393,31 +342,36 @@ class DesktopPet:
         print(f"Pet {self.pet_id} bounced off {side} wall while on ground")
     
     def _handle_wall_collision(self, side: str, wall_climbing_enabled: bool) -> None:
-        """Handle collision with left or right wall (for wall climbing when in air)"""
+        """Enhanced wall collision handling with proper wall climbing and drag support"""
+        if not self.boundary_manager:
+            return
+        
         boundaries = self.boundary_manager.boundaries
         
+        # Position pet exactly on the wall
         if side == 'left':
             self.x = boundaries['left_wall_x']
         else:  # right
             self.x = boundaries['right_wall_x'] - self.rect.width
         
-        # Wall climbing logic (only when not on ground)
+        # Handle wall climbing logic
         if wall_climbing_enabled and self.state not in [PetState.DRAGGING] and not self.on_ground:
-            # Start wall climbing if moving towards wall
-            if (side == 'left' and self.velocity_x < 0) or (side == 'right' and self.velocity_x > 0):
+            # Start wall climbing if moving towards wall or already on wall
+            if (side == 'left' and self.velocity_x < 0) or (side == 'right' and self.velocity_x > 0) or self.on_wall:
                 self.on_wall = True
                 self.wall_side = side
                 self.on_ground = False
                 self.gravity_enabled = False
                 self.velocity_x = 0
                 
-                # Start climbing animation
+                # Start climbing animation if not already climbing
                 if self.state != PetState.CLIMB_WALL:
                     self.change_state(PetState.GRAB_WALL)
                     self.stats.wall_climbs += 1
                     self.wall_climb_timer = 0.0
+                    print(f"Pet {self.pet_id} started wall climbing on {side} wall")
         else:
-            # Regular wall bounce
+            # Regular wall bounce for non-climbing scenarios
             self.velocity_x *= -self.BOUNCE_COEFFICIENT
             if abs(self.velocity_x) < self.MIN_BOUNCE_VELOCITY:
                 self.velocity_x = 0
@@ -425,10 +379,13 @@ class DesktopPet:
             self.on_wall = False
     
     def _handle_corner_collision(self, wall_side: str) -> None:
-        """Handle corner collision - move away from wall smoothly"""
+        """Enhanced corner collision handling with direction lock to prevent glitches"""
         print(f"Pet {self.pet_id} corner collision at {wall_side} wall")
         
-        # Turn away from the wall
+        # Lock direction changes to prevent glitches
+        self._lock_direction(0.8)  # Lock for 0.8 seconds
+        
+        # Turn away from the wall with proper timing
         if wall_side == 'left':
             # Move right away from left wall
             self.facing_right = True
@@ -440,8 +397,8 @@ class DesktopPet:
         if self.animation_manager:
             try:
                 self.animation_manager.set_facing_direction(not self.facing_right)
-            except:
-                pass
+            except Exception as e:
+                print(f"Error updating animation direction in corner collision: {e}")
         
         # Use the movement system to start walking away from the wall
         # Set a target in the new direction (away from the wall)
@@ -449,28 +406,32 @@ class DesktopPet:
             playable = self.boundary_manager.get_playable_area()
             if self.facing_right:
                 # Move right away from left wall
-                self.target_x = min(self.x + 80, playable['right'] - self.rect.width)
+                self.target_x = min(self.x + 120, playable['right'] - self.rect.width)
             else:
                 # Move left away from right wall
-                self.target_x = max(self.x - 80, playable['left'])
+                self.target_x = max(self.x - 120, playable['left'])
         else:
             # Fallback movement
             if self.facing_right:
-                self.target_x = min(self.x + 80, 1920 - self.rect.width)
+                self.target_x = min(self.x + 120, 1920 - self.rect.width)
             else:
-                self.target_x = max(self.x - 80, 0)
+                self.target_x = max(self.x - 120, 0)
         
         # Change to walking state
         self.change_state(PetState.WALKING)
+        print(f"Pet {self.pet_id} turning away from {wall_side} wall, direction locked for 0.8s")
     
     def _handle_wall_turn_around(self, wall_side: str) -> None:
-        """Handle regular wall collision - turn around and start moving"""
+        """Enhanced wall turn around with direction lock to prevent glitches"""
         print(f"Pet {self.pet_id} turned around at {wall_side} wall")
+        
+        # Lock direction changes to prevent glitches
+        self._lock_direction(0.6)  # Lock for 0.6 seconds
         
         # Stop horizontal movement to prevent oscillation
         self.velocity_x = 0
         
-        # Turn around
+        # Turn around with proper timing
         self._change_direction()
         
         # Set a brief pause to prevent immediate re-collision
@@ -482,21 +443,80 @@ class DesktopPet:
             playable = self.boundary_manager.get_playable_area()
             if self.facing_right:
                 # Move right away from left wall
-                self.target_x = min(self.x + 100, playable['right'] - self.rect.width)
+                self.target_x = min(self.x + 150, playable['right'] - self.rect.width)
             else:
                 # Move left away from right wall
-                self.target_x = max(self.x - 100, playable['left'])
+                self.target_x = max(self.x - 150, playable['left'])
         else:
             # Fallback movement
             if self.facing_right:
-                self.target_x = min(self.x + 100, 1920 - self.rect.width)
+                self.target_x = min(self.x + 150, 1920 - self.rect.width)
             else:
-                self.target_x = max(self.x - 100, 0)
+                self.target_x = max(self.x - 150, 0)
         
         # Change to walking state to start movement
         self.change_state(PetState.WALKING)
+        print(f"Pet {self.pet_id} turned around at {wall_side} wall, direction locked for 0.6s")
     
-
+    def _handle_drag_wall_collision(self, side: str) -> None:
+        """Handle wall collision while dragging - pet sticks to wall"""
+        if not self.boundary_manager:
+            return
+        
+        boundaries = self.boundary_manager.boundaries
+        
+        # Position pet exactly on the wall
+        if side == 'left':
+            self.x = boundaries['left_wall_x']
+            self.facing_right = False  # Face toward left wall
+        else:  # right
+            self.x = boundaries['right_wall_x'] - self.rect.width
+            self.facing_right = True  # Face toward right wall
+        
+        # Set wall sticking state
+        self.on_wall = True
+        self.wall_side = side
+        self.on_ground = False
+        self.gravity_enabled = False
+        self.velocity_x = 0
+        self.velocity_y = 0
+        
+        # Update animation facing direction
+        if self.animation_manager:
+            try:
+                # Animation manager's set_facing_direction expects the visual direction
+                self.animation_manager.set_facing_direction(self.facing_right)
+            except:
+                pass
+        
+        print(f"Pet {self.pet_id} stuck to {side} wall during drag")
+    
+    def _handle_ground_collision(self) -> None:
+        """Handle ground collision"""
+        if not self.boundary_manager:
+            return
+        
+        boundaries = self.boundary_manager.boundaries
+        self.y = boundaries['ground_y'] - self.rect.height
+        
+        if abs(self.velocity_y) > self.MIN_BOUNCE_VELOCITY:
+            self.velocity_y *= -self.BOUNCE_COEFFICIENT
+            self.change_state(PetState.BOUNCING)
+        else:
+            self.velocity_y = 0
+            self.on_ground = True
+            self.on_wall = False
+            if self.state in [PetState.FALLING, PetState.THROWN, PetState.BOUNCING]:
+                self.change_state(PetState.IDLE)
+    
+    def _handle_ceiling_collision(self) -> None:
+        """Handle ceiling collision"""
+        if not self.boundary_manager:
+            return
+        
+        boundaries = self.boundary_manager.boundaries
+        self.y = boundaries['ceiling_y']
+        self.velocity_y = max(0, self.velocity_y)  # Stop upward movement
     
     def _update_movement_fallback(self, dt: float, screen_bounds: Tuple[int, int]) -> None:
         """Fallback movement system when boundary manager not available"""
@@ -626,6 +646,7 @@ class DesktopPet:
             if self.state_timer > 1.0:  # Grab for 1 second
                 if self.config.get('boundaries.wall_climbing_enabled', True):
                     self.change_state(PetState.CLIMB_WALL)
+                    print(f"Pet {self.pet_id} started climbing wall")
                 else:
                     # Fall off wall if climbing disabled
                     self.on_wall = False
@@ -634,33 +655,50 @@ class DesktopPet:
                     self.change_state(PetState.FALLING)
         
         elif self.state == PetState.CLIMB_WALL:
-            # Wall climbing behavior
+            # Enhanced wall climbing behavior with proper animation
             if self.on_wall and self.boundary_manager:
-                # Climb up slowly
-                climb_speed = 20  # pixels per second
+                # Climb up slowly using animation velocity
+                climb_speed = 25  # pixels per second (reduced for smoother animation)
                 self.y -= climb_speed * dt
+                
+                # Update animation facing direction for wall climbing
+                if self.animation_manager:
+                    try:
+                        # For wall climbing, face away from the wall
+                        if self.wall_side == 'left':
+                            self.facing_right = True  # Face right when climbing left wall
+                        else:
+                            self.facing_right = False  # Face left when climbing right wall
+                        
+                        # Animation manager's set_facing_direction expects the visual direction
+                        self.animation_manager.set_facing_direction(self.facing_right)
+                    except Exception as e:
+                        print(f"Error updating wall climbing animation: {e}")
                 
                 # Check if reached top or should stop climbing
                 boundaries = self.boundary_manager.boundaries
-                if self.y <= boundaries['ceiling_y'] + 50:  # Near ceiling
+                if self.y <= boundaries['ceiling_y'] + 80:  # Near ceiling (increased threshold)
                     # Transition to ceiling grab or fall
                     self.on_wall = False
                     self.wall_side = None
                     self.gravity_enabled = True
                     self.change_state(PetState.FALLING)
-                elif self.state_timer > 5.0:  # Climb for max 5 seconds
+                    print(f"Pet {self.pet_id} reached ceiling, falling")
+                elif self.state_timer > 10.0:  # Climb for max 10 seconds (increased)
                     # Get tired and fall
                     self.on_wall = False
                     self.wall_side = None
                     self.gravity_enabled = True
                     self.velocity_y = 0  # Start falling gently
                     self.change_state(PetState.FALLING)
+                    print(f"Pet {self.pet_id} got tired, falling from wall")
             else:
                 # Lost wall contact
                 self.on_wall = False
                 self.wall_side = None
                 self.gravity_enabled = True
                 self.change_state(PetState.FALLING)
+                print(f"Pet {self.pet_id} lost wall contact, falling")
         
         elif self.state in [PetState.POSE, PetState.EAT_BERRY, PetState.THROW_NEEDLE, PetState.WATCH]:
             # Special actions - wait for animation to complete
@@ -871,13 +909,36 @@ class DesktopPet:
         self.change_state(PetState.WALKING)
     
     def _change_direction(self) -> None:
-        """Change facing direction"""
+        """Enhanced direction change with cooldown to prevent glitches"""
+        current_time = time.time()
+        
+        # Check if enough time has passed since last direction change
+        if current_time - self.last_direction_change < self.direction_change_cooldown:
+            return  # Skip direction change if too soon
+        
+        # Check if direction is locked
+        if self.direction_lock_timer < self.direction_lock_duration:
+            return  # Skip direction change if still locked
+        
+        # Change direction
         self.facing_right = not self.facing_right
+        self.last_direction_change = current_time
+        
+        # Update animation facing direction
         if self.animation_manager:
             try:
                 self.animation_manager.set_facing_direction(not self.facing_right)  
-            except:
-                pass
+            except Exception as e:
+                print(f"Error updating animation direction: {e}")
+        
+        print(f"Pet {self.pet_id} changed direction to {'right' if self.facing_right else 'left'}")
+    
+    def _lock_direction(self, duration: float = None) -> None:
+        """Lock direction changes for a specified duration"""
+        if duration is None:
+            duration = self.direction_lock_duration
+        self.direction_lock_timer = 0.0  # Reset timer
+        self.direction_lock_duration = duration
     
     def _update_stats(self, dt: float) -> None:
         """Enhanced stats management"""
@@ -946,12 +1007,32 @@ class DesktopPet:
                     self.on_ground = True
                     self.gravity_enabled = True
             elif new_state in [PetState.GRAB_WALL, PetState.CLIMB_WALL]:
-                self.on_wall = True
+                # Enhanced wall climbing states with proper animation
                 self.on_ground = False
                 self.gravity_enabled = False
                 self.velocity_x = 0
-                if new_state == PetState.CLIMB_WALL:
-                    self.velocity_y = 0  # Start climbing from stationary
+                self.velocity_y = 0
+                
+                # Lock direction changes during wall climbing to prevent glitches
+                self._lock_direction(2.0)  # Lock for 2 seconds during wall climbing
+                
+                # Set proper facing direction for wall climbing
+                if self.wall_side == 'left':
+                    self.facing_right = False  # Face left (toward left wall)
+                elif self.wall_side == 'right':
+                    self.facing_right = True  # Face right (toward right wall)
+                
+                # Update animation facing direction (animation manager uses opposite logic)
+                if self.animation_manager:
+                    try:
+                        # For wall climbing, we want the sprite to face away from the wall
+                        # Animation manager's set_facing_direction expects the visual direction
+                        self.animation_manager.set_facing_direction(self.facing_right)
+                        print(f"Pet {self.pet_id} wall climbing animation direction set to {'right' if self.facing_right else 'left'}")
+                    except Exception as e:
+                        print(f"Error setting wall climbing animation direction: {e}")
+                
+                print(f"Pet {self.pet_id} entered {new_state.value} state with direction lock")
             elif new_state in [PetState.WALKING, PetState.RUNNING]:
                 # Initialize walk duration tracking
                 if not hasattr(self, 'walk_duration') or self.walk_duration == 0.0:
@@ -1002,9 +1083,16 @@ class DesktopPet:
         return "none"
     
     def handle_mouse_up(self, button: int, mouse_dx: float = 0.0, mouse_dy: float = 0.0) -> str:
-        """Enhanced mouse up handling with throw physics"""
+        """Enhanced mouse up handling with wall sticking release"""
         if button == 1 and self.dragging:
             self.dragging = False
+            
+            # Release wall sticking state
+            if self.on_wall:
+                self.on_wall = False
+                self.wall_side = None
+                self.gravity_enabled = True
+                print(f"Pet {self.pet_id} released from wall")
             
             # Apply throw velocity
             self.velocity_x = mouse_dx * self.DRAG_THROW_MULTIPLIER
@@ -1012,7 +1100,6 @@ class DesktopPet:
             
             self.change_state(PetState.THROWN)
             self.on_ground = False
-            self.on_wall = False
             self.gravity_enabled = True
             
             return "drag_end"
@@ -1020,10 +1107,40 @@ class DesktopPet:
         return "none"
     
     def handle_mouse_motion(self, pos: Tuple[int, int]) -> None:
-        """Enhanced mouse motion handling"""
+        """Enhanced mouse motion handling with wall collision prevention"""
         if self.dragging:
-            self.x = float(pos[0] - self.drag_offset_x) 
-            self.y = float(pos[1] - self.drag_offset_y)
+            new_x = float(pos[0] - self.drag_offset_x)
+            new_y = float(pos[1] - self.drag_offset_y)
+            
+            # Check if new position would cross wall boundaries
+            if self.boundary_manager:
+                boundaries = self.boundary_manager.boundaries
+                
+                # Prevent crossing left wall
+                if new_x < boundaries['left_wall_x']:
+                    new_x = boundaries['left_wall_x']
+                    # Trigger wall sticking
+                    if not self.on_wall:
+                        self._handle_drag_wall_collision('left')
+                
+                # Prevent crossing right wall
+                elif new_x + self.rect.width > boundaries['right_wall_x']:
+                    new_x = boundaries['right_wall_x'] - self.rect.width
+                    # Trigger wall sticking
+                    if not self.on_wall:
+                        self._handle_drag_wall_collision('right')
+                
+                # Prevent crossing ground
+                if new_y + self.rect.height > boundaries['ground_y']:
+                    new_y = boundaries['ground_y'] - self.rect.height
+                
+                # Prevent crossing ceiling
+                if new_y < boundaries['ceiling_y']:
+                    new_y = boundaries['ceiling_y']
+            
+            # Update position
+            self.x = new_x
+            self.y = new_y
             
             self.target_x = self.x
             self.target_y = self.y
@@ -1213,8 +1330,18 @@ class DesktopPet:
             wall_indicator = font.render(f"WALL-{self.wall_side.upper()}", True, wall_color)
             screen.blit(wall_indicator, (self.rect.x, self.rect.y - 50))
         
-        # Draw facing direction indicator
-        if self.facing_right:
+        # Draw facing direction indicator (consisten dengan visual direction)
+        # Arrow harus menunjukkan arah visual yang sebenarnya dari sprite
+        visual_facing_right = self.facing_right
+        
+        # Untuk wall climbing, sprite menghadap ke dinding (bukan menjauh dari dinding)
+        if self.on_wall and self.wall_side:
+            if self.wall_side == 'left':
+                visual_facing_right = False  # Sprite menghadap kiri (ke dinding kiri)
+            elif self.wall_side == 'right':
+                visual_facing_right = True  # Sprite menghadap kanan (ke dinding kanan)
+        
+        if visual_facing_right:
             pygame.draw.polygon(screen, (255, 255, 0), [
                 (self.rect.right - 10, self.rect.top + 5),
                 (self.rect.right - 5, self.rect.top + 10),
