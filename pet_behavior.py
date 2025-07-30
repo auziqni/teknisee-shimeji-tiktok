@@ -76,7 +76,6 @@ class PetStats:
     times_petted: int = 0
     special_actions_performed: int = 0
     wall_climbs: int = 0  # NEW: wall climbing counter
-    corner_bounces: int = 0  # NEW: corner bounce counter
 
 
 class DesktopPet:
@@ -100,11 +99,22 @@ class DesktopPet:
         self.state_timer = 0.0
         self.state_duration = 0.0
         
+        # NEW: Walk duration tracking
+        self.walk_duration = 0.0
+        self.walk_start_time = 0.0
+        
         # NEW: Boundary system integration
         self.boundary_manager: Optional['BoundaryManager'] = None
         self.on_wall = False
         self.wall_side = None  # 'left' or 'right'
         self.wall_climb_timer = 0.0
+        
+        # NEW: Collision prevention system
+        self.last_collision_time = 0.0
+        self.collision_cooldown = 0.5  # Minimum time between collisions
+        self.direction_lock_timer = 0.0
+        self.direction_lock_duration = 0.3  # Lock direction for this duration
+        self.last_wall_side = None
         
         # Animation system - with fallback
         self.animation_manager = None
@@ -194,7 +204,7 @@ class DesktopPet:
             try:
                 success = self.animation_manager.play_action(self.state.value, loop=True)
                 if success:
-                    self.animation_manager.set_facing_direction(self.facing_right)
+                    self.animation_manager.set_facing_direction(not self.facing_right)
                     available_actions = self.animation_manager.get_available_actions()
                     print(f"Available animations for {self.sprite_name}: {len(available_actions)} actions")
                 else:
@@ -210,6 +220,10 @@ class DesktopPet:
         self.stats.time_in_current_state += dt
         self.wall_climb_timer += dt
         
+        # Update collision prevention timers
+        self.last_collision_time += dt
+        self.direction_lock_timer += dt
+        
         # Update animation system
         if self.animation_manager:
             try:
@@ -217,9 +231,17 @@ class DesktopPet:
                 
                 # Use animation velocity only for specific states
                 if not self.dragging and self.state in [PetState.WALKING, PetState.RUNNING]:
-                    vel_x = anim_velocity[0] if self.facing_right else -anim_velocity[0]
-                    self.velocity_x = vel_x
+                    # Apply velocity based on facing direction
+                    # Animation velocity is positive for right movement, negative for left
+                    if self.facing_right:
+                        self.velocity_x = abs(anim_velocity[0])  # Always positive for right
+                    else:
+                        self.velocity_x = -abs(anim_velocity[0])  # Always negative for left
                     self.velocity_y = anim_velocity[1]
+                    
+                    # Debug: Log velocity application
+                    if self.config.get('settings.debug_mode', False):
+                        print(f"Pet {self.pet_id} velocity: anim_velocity={anim_velocity[0]:.1f}, facing_right={self.facing_right}, applied_velocity={self.velocity_x:.1f}")
                 
                 if self.current_sprite:
                     self.image = self.current_sprite
@@ -278,8 +300,12 @@ class DesktopPet:
             self._handle_boundary_collisions(collision, prev_x, prev_y)
     
     def _handle_boundary_collisions(self, collision: Dict[str, bool], prev_x: float, prev_y: float) -> None:
-        """Handle boundary collisions with simple corner turn-around logic"""
+        """Handle boundary collisions with improved corner and wall logic"""
         wall_climbing_enabled = self.config.get('boundaries.wall_climbing_enabled', True)
+        
+        # Check collision cooldown to prevent rapid oscillation
+        if self.last_collision_time < self.collision_cooldown:
+            return
         
         # PRIORITY 1: Handle ground collision FIRST
         if collision['ground']:
@@ -296,13 +322,13 @@ class DesktopPet:
                 if self.state in [PetState.FALLING, PetState.THROWN, PetState.BOUNCING]:
                     self.change_state(PetState.IDLE)
         
-        # PRIORITY 2: Handle wall collisions with SIMPLE turn-around logic
+        # PRIORITY 2: Handle wall collisions with IMPROVED logic
         wall_hit = collision['left_wall'] or collision['right_wall']
         
         if wall_hit:
             boundaries = self.boundary_manager.boundaries
             
-            # Position correction
+            # Determine wall side
             if collision['left_wall']:
                 self.x = boundaries['left_wall_x']
                 wall_side = 'left'
@@ -310,27 +336,38 @@ class DesktopPet:
                 self.x = boundaries['right_wall_x'] - self.rect.width
                 wall_side = 'right'
             
-            # SIMPLE LOGIC: Just turn around and stop oscillation
-            if self.on_ground:
-                # Ground-based: Simple turn around
-                self.velocity_x = 0  # Stop horizontal movement to prevent oscillation
-                self._change_direction()  # Turn around
-                print(f"Pet {self.pet_id} turned around at {wall_side} wall")
+            # Check if this is a corner (wall + ground collision)
+            is_corner = collision['ground'] and wall_hit
+            
+            # Check direction lock to prevent rapid direction changes
+            can_change_direction = self.direction_lock_timer >= self.direction_lock_duration
+            
+            # Check if this is the same wall we just hit (prevent oscillation)
+            is_same_wall = (self.last_wall_side == wall_side)
+            
+            if self.on_ground and can_change_direction and not is_same_wall:
+                # Ground-based wall collision
+                if is_corner:
+                    # Corner collision - move away from wall
+                    self._handle_corner_collision(wall_side)
+                else:
+                    # Regular wall collision - simple turn around
+                    self._handle_wall_turn_around(wall_side)
                 
-                # Set a brief pause to prevent immediate re-collision
-                self.behavior_timer = 0.0  # Reset behavior timer
+                # Set collision cooldown and direction lock
+                self.last_collision_time = 0.0
+                self.direction_lock_timer = 0.0
+                self.last_wall_side = wall_side
                 
-            else:
-                # Air-based: Reserved for future wall climbing development
-                # For now, simple bounce
+            elif not self.on_ground:
+                # Air-based collision - simple bounce
                 self.velocity_x *= -self.BOUNCE_COEFFICIENT
                 if abs(self.velocity_x) < self.MIN_BOUNCE_VELOCITY:
                     self.velocity_x = 0
-                self._change_direction()
                 
-                # TODO: Future wall climbing logic goes here
-                # if wall_climbing_enabled:
-                #     self._start_wall_climbing(wall_side)
+                if can_change_direction:
+                    self._change_direction()
+                    self.direction_lock_timer = 0.0
         
         # Handle ceiling collision (for future use)
         if collision['ceiling']:
@@ -387,33 +424,79 @@ class DesktopPet:
             self._change_direction()
             self.on_wall = False
     
-    def _handle_corner_bounce(self, collision: Dict[str, bool]) -> None:
-        """Handle corner bounce with enhanced physics"""
-        # Determine bounce direction based on which corner
-        if collision['left_wall'] and collision['ground']:
-            # Bottom-left corner - bounce right and up
-            self.velocity_x = abs(self.velocity_x) * self.BOUNCE_COEFFICIENT * 2
-            self.velocity_y = -abs(self.velocity_y) * self.BOUNCE_COEFFICIENT
+    def _handle_corner_collision(self, wall_side: str) -> None:
+        """Handle corner collision - move away from wall smoothly"""
+        print(f"Pet {self.pet_id} corner collision at {wall_side} wall")
+        
+        # Turn away from the wall
+        if wall_side == 'left':
+            # Move right away from left wall
             self.facing_right = True
-        elif collision['right_wall'] and collision['ground']:
-            # Bottom-right corner - bounce left and up
-            self.velocity_x = -abs(self.velocity_x) * self.BOUNCE_COEFFICIENT * 2
-            self.velocity_y = -abs(self.velocity_y) * self.BOUNCE_COEFFICIENT
+        else:  # right wall
+            # Move left away from right wall
             self.facing_right = False
         
-        # Update animation facing direction
+        # Update animation facing direction (invert for visual correction)
         if self.animation_manager:
             try:
-                self.animation_manager.set_facing_direction(self.facing_right)
+                self.animation_manager.set_facing_direction(not self.facing_right)
             except:
                 pass
         
-        self.change_state(PetState.BOUNCING)
-        self.stats.corner_bounces += 1
-        self.on_ground = False
-        self.on_wall = False
-        self.gravity_enabled = True
-        print(f"Pet {self.pet_id} corner bounce! Stats: {self.stats.corner_bounces} bounces")
+        # Use the movement system to start walking away from the wall
+        # Set a target in the new direction (away from the wall)
+        if self.boundary_manager:
+            playable = self.boundary_manager.get_playable_area()
+            if self.facing_right:
+                # Move right away from left wall
+                self.target_x = min(self.x + 80, playable['right'] - self.rect.width)
+            else:
+                # Move left away from right wall
+                self.target_x = max(self.x - 80, playable['left'])
+        else:
+            # Fallback movement
+            if self.facing_right:
+                self.target_x = min(self.x + 80, 1920 - self.rect.width)
+            else:
+                self.target_x = max(self.x - 80, 0)
+        
+        # Change to walking state
+        self.change_state(PetState.WALKING)
+    
+    def _handle_wall_turn_around(self, wall_side: str) -> None:
+        """Handle regular wall collision - turn around and start moving"""
+        print(f"Pet {self.pet_id} turned around at {wall_side} wall")
+        
+        # Stop horizontal movement to prevent oscillation
+        self.velocity_x = 0
+        
+        # Turn around
+        self._change_direction()
+        
+        # Set a brief pause to prevent immediate re-collision
+        self.behavior_timer = 0.0  # Reset behavior timer
+        
+        # Use the movement system to start walking in the new direction
+        # Set a target in the new direction (away from the wall)
+        if self.boundary_manager:
+            playable = self.boundary_manager.get_playable_area()
+            if self.facing_right:
+                # Move right away from left wall
+                self.target_x = min(self.x + 100, playable['right'] - self.rect.width)
+            else:
+                # Move left away from right wall
+                self.target_x = max(self.x - 100, playable['left'])
+        else:
+            # Fallback movement
+            if self.facing_right:
+                self.target_x = min(self.x + 100, 1920 - self.rect.width)
+            else:
+                self.target_x = max(self.x - 100, 0)
+        
+        # Change to walking state to start movement
+        self.change_state(PetState.WALKING)
+    
+
     
     def _update_movement_fallback(self, dt: float, screen_bounds: Tuple[int, int]) -> None:
         """Fallback movement system when boundary manager not available"""
@@ -513,6 +596,15 @@ class DesktopPet:
                     animation_completed = self.animation_manager.is_animation_completed()
                 except:
                     animation_completed = True
+            
+            # Check if walk duration has expired (1-5 seconds)
+            walk_time_elapsed = self.state_timer - self.walk_start_time
+            if walk_time_elapsed >= self.walk_duration:
+                self.velocity_x = 0
+                self.change_state(PetState.IDLE)
+                self.stats.walks_taken += 1
+                print(f"Pet {self.pet_id} finished walking after {walk_time_elapsed:.1f}s")
+                return
             
             # Reduce speed as we approach target
             if distance_to_target < 50:
@@ -690,34 +782,60 @@ class DesktopPet:
                     break
     
     def _start_movement(self, movement_type: PetState) -> None:
-        """Start movement dengan target random"""
+        """Start movement dengan target random dan wall-aware direction selection"""
+        # Set random walk duration between 1-5 seconds
+        self.walk_duration = random.uniform(1.0, 5.0)
+        self.walk_start_time = self.state_timer
+        
         if self.boundary_manager:
-            # Use boundary-aware movement
+            # Use boundary-aware movement with wall proximity detection
             playable = self.boundary_manager.get_playable_area()
+            boundaries = self.boundary_manager.boundaries
             max_distance = 300 if movement_type == PetState.RUNNING else 150
-            direction = random.choice([-1, 1])
-            distance = random.randint(50, max_distance)
             
+            # Check proximity to walls for direction bias
+            left_distance = abs(self.x - boundaries['left_wall_x'])
+            right_distance = abs(self.x - boundaries['right_wall_x'])
+            wall_proximity_threshold = 100  # Distance to consider "near wall"
+            
+            # Determine direction with wall bias
+            if left_distance < wall_proximity_threshold:
+                # Near left wall - bias towards right (2x probability)
+                direction = 1 if random.random() < 0.67 else -1
+                print(f"Pet {self.pet_id} near left wall, biased towards right")
+            elif right_distance < wall_proximity_threshold:
+                # Near right wall - bias towards left (2x probability)
+                direction = -1 if random.random() < 0.67 else 1
+                print(f"Pet {self.pet_id} near right wall, biased towards left")
+            else:
+                # Not near walls - random direction
+                direction = random.choice([-1, 1])
+            
+            distance = random.randint(50, max_distance)
             self.target_x = self.x + (distance * direction)
             # Clamp to playable area
             self.target_x = max(playable['left'], min(playable['right'] - self.rect.width, self.target_x))
         else:
-            # Fallback movement
+            # Fallback movement (no wall detection)
             max_distance = 300 if movement_type == PetState.RUNNING else 150
             direction = random.choice([-1, 1])
             distance = random.randint(50, max_distance)
             self.target_x = self.x + (distance * direction)
             self.target_x = max(0.0, min(1920.0, self.target_x))
         
+        # Determine facing direction based on target
         self.facing_right = self.target_x > self.x
         
-        # Update animation facing direction
+        # Update animation facing direction (invert for visual correction)
         if self.animation_manager:
             try:
-                self.animation_manager.set_facing_direction(self.facing_right)
+                self.animation_manager.set_facing_direction(not self.facing_right)
             except:
                 pass
         
+        # Debug: Log the actual direction and target
+        direction_text = "right" if self.facing_right else "left"
+        print(f"Pet {self.pet_id} starting {movement_type.value} for {self.walk_duration:.1f}s towards {direction_text} (target_x: {self.target_x:.1f}, current_x: {self.x:.1f})")
         self.change_state(movement_type)
     
     def _start_wall_climbing(self) -> None:
@@ -742,10 +860,10 @@ class DesktopPet:
             self.wall_side = 'right'
             self.facing_right = True
         
-        # Update animation facing direction
+        # Update animation facing direction (invert for visual correction)
         if self.animation_manager:
             try:
-                self.animation_manager.set_facing_direction(self.facing_right)
+                self.animation_manager.set_facing_direction(not self.facing_right)
             except:
                 pass
         
@@ -757,7 +875,7 @@ class DesktopPet:
         self.facing_right = not self.facing_right
         if self.animation_manager:
             try:
-                self.animation_manager.set_facing_direction(self.facing_right)  
+                self.animation_manager.set_facing_direction(not self.facing_right)  
             except:
                 pass
     
@@ -834,6 +952,11 @@ class DesktopPet:
                 self.velocity_x = 0
                 if new_state == PetState.CLIMB_WALL:
                     self.velocity_y = 0  # Start climbing from stationary
+            elif new_state in [PetState.WALKING, PetState.RUNNING]:
+                # Initialize walk duration tracking
+                if not hasattr(self, 'walk_duration') or self.walk_duration == 0.0:
+                    self.walk_duration = random.uniform(1.0, 5.0)
+                    self.walk_start_time = self.state_timer
     
     def handle_mouse_down(self, pos: Tuple[int, int], button: int) -> str:
         """Enhanced mouse handling"""
@@ -958,7 +1081,6 @@ class DesktopPet:
                 'times_petted': self.stats.times_petted,
                 'special_actions': self.stats.special_actions_performed,
                 'wall_climbs': self.stats.wall_climbs,
-                'corner_bounces': self.stats.corner_bounces,
                 'time_in_state': self.stats.time_in_current_state
             },
             'animation': animation_info,
@@ -991,8 +1113,7 @@ class DesktopPet:
                 'walks_taken': self.stats.walks_taken,
                 'times_petted': self.stats.times_petted,
                 'special_actions_performed': self.stats.special_actions_performed,
-                'wall_climbs': self.stats.wall_climbs,
-                'corner_bounces': self.stats.corner_bounces
+                            'wall_climbs': self.stats.wall_climbs
             }
         }
     
@@ -1036,12 +1157,11 @@ class DesktopPet:
         pet.stats.times_petted = stats_data.get('times_petted', 0)
         pet.stats.special_actions_performed = stats_data.get('special_actions_performed', 0)
         pet.stats.wall_climbs = stats_data.get('wall_climbs', 0)
-        pet.stats.corner_bounces = stats_data.get('corner_bounces', 0)
         
-        # Update animation facing direction
+        # Update animation facing direction (invert for visual correction)
         if pet.animation_manager:
             try:
-                pet.animation_manager.set_facing_direction(pet.facing_right)
+                pet.animation_manager.set_facing_direction(not pet.facing_right)
             except:
                 pass
         
@@ -1059,8 +1179,8 @@ class DesktopPet:
         if self.config.get('settings.debug_mode', False):
             self._draw_debug_info(screen)
         
-        # Stats overlay (optional)
-        if self.config.get('settings.show_stats', False):
+        # Stats overlay (only when debug mode is active)
+        if self.config.get('settings.debug_mode', False) and self.config.get('settings.show_stats', False):
             self._draw_stats_overlay(screen)
     
     def _draw_debug_info(self, screen: pygame.Surface) -> None:
@@ -1135,7 +1255,6 @@ class DesktopPet:
             f"Energy: {self.stats.energy:.0f}",
             f"State: {self.state.value}",
             f"Climbs: {self.stats.wall_climbs}",
-            f"Bounces: {self.stats.corner_bounces}",
         ]
         
         for stat_text in stats_info:
@@ -1176,8 +1295,7 @@ class DesktopPet:
             'wall_climbing_stats': {
                 'on_wall': self.on_wall,
                 'wall_side': self.wall_side,
-                'total_climbs': self.stats.wall_climbs,
-                'corner_bounces': self.stats.corner_bounces
+                'total_climbs': self.stats.wall_climbs
             },
             'update_frequency': '30 FPS target',
             'memory_footprint': 'Light (sprites cached)'

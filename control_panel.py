@@ -240,10 +240,7 @@ class ControlPanel(QMainWindow):
         self.wall_climbing_check.toggled.connect(self._on_wall_climbing_changed)
         boundary_layout.addWidget(self.wall_climbing_check)
         
-        self.corner_bounce_check = QCheckBox("Enable Corner Bouncing")
-        self.corner_bounce_check.setChecked(self.config.get('boundaries.corner_bounce_enabled', True))
-        self.corner_bounce_check.toggled.connect(self._on_corner_bounce_changed)
-        boundary_layout.addWidget(self.corner_bounce_check)
+
         
         # Boundary info
         boundary_info = QLabel("Boundaries are shown as colored lines in debug mode (F1).\nBlue=Ground, Purple=Walls")
@@ -526,7 +523,6 @@ class ControlPanel(QMainWindow):
         self.debug_check.setChecked(self.config.get('settings.debug_mode', False))
         self.show_stats_check.setChecked(self.config.get('settings.show_stats', False))
         self.wall_climbing_check.setChecked(self.config.get('boundaries.wall_climbing_enabled', True))
-        self.corner_bounce_check.setChecked(self.config.get('boundaries.corner_bounce_enabled', True))
 
         # Update slider labels
         self._on_volume_changed(self.volume_slider.value())
@@ -570,10 +566,7 @@ class ControlPanel(QMainWindow):
         self.config.set('boundaries.wall_climbing_enabled', checked)
         self.settings_changed.emit('wall_climbing_enabled', checked)
     
-    def _on_corner_bounce_changed(self, checked: bool) -> None:
-        """Handle corner bounce checkbox change"""
-        self.config.set('boundaries.corner_bounce_enabled', checked)
-        self.settings_changed.emit('corner_bounce_enabled', checked)
+
 
     def _on_sprite_changed(self, sprite_name: str) -> None:
         """Handle sprite selection change"""

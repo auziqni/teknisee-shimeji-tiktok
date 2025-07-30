@@ -238,7 +238,6 @@ class TechniseeShimeji:
         print(f"   Right Wall: {boundaries['right_wall_x']}px ({self.config.get('boundaries.right_wall_percent')}%)")
         print(f"   Ground: {boundaries['ground_y']}px ({self.config.get('boundaries.ground_percent')}%)")
         print(f"   Wall Climbing: {'✅ Enabled' if self.config.get('boundaries.wall_climbing_enabled') else '❌ Disabled'}")
-        print(f"   Corner Bounce: {'✅ Enabled' if self.config.get('boundaries.corner_bounce_enabled') else '❌ Disabled'}")
         print(f"{'='*60}")
         
         if ANIMATION_SYSTEM_AVAILABLE:
@@ -247,7 +246,6 @@ class TechniseeShimeji:
             print(f"   ✅ Tkinter transparency with Pygame rendering")
             print(f"   ✅ Configurable screen boundaries")
             print(f"   ✅ Wall climbing abilities")
-            print(f"   ✅ Corner bouncing physics")
             print(f"   ✅ Enhanced debug visualization")
         else:
             print(f"⚠️  Running in compatibility mode")

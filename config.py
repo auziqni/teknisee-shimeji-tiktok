@@ -51,7 +51,6 @@ class ConfigManager:
                 "ground_percent": 90,        # 90% from top (10% from bottom)
                 "ceiling_percent": 5,        # 5% from top (for future use)
                 "wall_climbing_enabled": True,  # Enable wall climbing physics
-                "corner_bounce_enabled": True,  # Enable corner bouncing
             },
             "tiktok": {
                 "enabled": False,

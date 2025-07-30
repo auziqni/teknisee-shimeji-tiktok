@@ -263,7 +263,7 @@ class PygameWindow:
         print(f"Setting changed: {setting_name} = {value}")
 
         # Handle boundary-specific changes
-        if setting_name in ['left_wall_percent', 'right_wall_percent', 'ground_percent', 'wall_climbing_enabled', 'corner_bounce_enabled']:
+        if setting_name in ['left_wall_percent', 'right_wall_percent', 'ground_percent', 'wall_climbing_enabled']:
             self.boundary_manager.update_boundaries()
             print(f"Boundaries updated: {self.boundary_manager.boundaries}")
 
@@ -420,8 +420,8 @@ class PygameWindow:
         for pet in self.pets:
             pet.draw(self.screen)
         
-        # Draw debug overlay if enabled
-        if self.config.get('settings.show_stats', False):
+        # Draw debug overlay if debug mode is enabled
+        if self.config.get('settings.debug_mode', False):
             self._draw_debug_overlay()
         
         # Update display
